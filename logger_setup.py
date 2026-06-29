@@ -34,6 +34,7 @@ def setup_logger():
         level=logging.INFO,
         format=log_format,
         handlers=[
+            logging.StreamHandler(sys.stdout),
             logging.FileHandler(log_file_path, mode='w', encoding='utf-8'),
             error_handler
         ]

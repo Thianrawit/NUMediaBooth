@@ -1,8 +1,10 @@
 __pycache__/
 dist/
 build/
+*.iss
 *.spec
 logs/
+Output/
 .NUMediaBooth_Temp/
 saveSetting/config.json
 .env

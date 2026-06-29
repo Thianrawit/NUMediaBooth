@@ -15,6 +15,7 @@ from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QSpacerItem,
@@ -25,6 +26,37 @@ from PyQt6.QtWidgets import (
 import logging
 
 logger = logging.getLogger(__name__)
+
+class ResponsiveImageLabel(QLabel):
+    """QLabel ที่วาดรูปและรักษาสัดส่วนอัตโนมัติตามขนาดของหน้าต่าง"""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._original_pixmap = None
+        self.setMinimumSize(150, 150) # ขนาดเล็กสุดเพื่อไม่ให้บีบจนสแกนไม่ได้
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+    def set_pixmap_preserve_aspect(self, pixmap: QPixmap):
+        self._original_pixmap = pixmap
+        self._update_pixmap()
+
+    def _update_pixmap(self):
+        if self._original_pixmap and not self._original_pixmap.isNull():
+            # คำนวณให้พอดีกับกล่องและรักษาสัดส่วน
+            size = min(self.width(), self.height())
+            if size <= 0:
+                return
+                
+            scaled = self._original_pixmap.scaled(
+                size, size, 
+                Qt.AspectRatioMode.KeepAspectRatio, 
+                Qt.TransformationMode.FastTransformation # ใช้ Fast กันภาพเบลอตอนขยาย
+            )
+            super().setPixmap(scaled)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._update_pixmap()
 
 class FinishWidget(QWidget):
     """
@@ -91,11 +123,9 @@ class FinishWidget(QWidget):
         qr_layout.addWidget(lbl_instruction)
         
         # 3. ภาพ QR Code
-        self.lbl_qr = QLabel()
-        self.lbl_qr.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_qr.setFixedSize(300, 300)
+        self.lbl_qr = ResponsiveImageLabel()
         self.lbl_qr.setStyleSheet("background: white;")
-        qr_layout.addWidget(self.lbl_qr)
+        qr_layout.addWidget(self.lbl_qr, stretch=1)
         
         # 4. ข้อความลิงก์สำรองเผื่อสแกนไม่ได้
         self.lbl_link = QLabel("Google Drive Folder")
@@ -104,11 +134,13 @@ class FinishWidget(QWidget):
         self.lbl_link.setWordWrap(True)
         qr_layout.addWidget(self.lbl_link)
         
-        # ห่อ QFrame ไว้ตรงกลาง
-        qr_container = QVBoxLayout()
-        qr_container.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        qr_container.addWidget(qr_frame)
-        layout.addLayout(qr_container)
+        # ห่อ QFrame ไว้ตรงกลางแต่ให้สามารถขยายได้
+        qr_container = QHBoxLayout()
+        qr_container.addStretch(1)
+        qr_container.addWidget(qr_frame, stretch=1)
+        qr_container.addStretch(1)
+        # ให้กรอบ QR Code ได้พื้นที่แนวตั้งเยอะๆ (ประมาณ 40-50% ของจอ)
+        layout.addLayout(qr_container, stretch=10)
         
         # Spacer ล่าง
         layout.addStretch(1)
@@ -157,14 +189,10 @@ class FinishWidget(QWidget):
             qimage = ImageQt.ImageQt(pil_image)
             pixmap = QPixmap.fromImage(qimage)
             
-            # ปรับขนาดให้พอดี
-            scaled_pixmap = pixmap.scaled(
-                self.lbl_qr.size(), 
-                Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.SmoothTransformation
-            )
-            self.lbl_qr.setPixmap(scaled_pixmap)
+            # ส่ง Pixmap ต้นฉบับไปให้ ResponsiveImageLabel จัดการย่อขยายเอง
+            self.lbl_qr.set_pixmap_preserve_aspect(pixmap)
+            
         else:
-            self.lbl_qr.setText("❌ ไม่ได้ตั้งค่า Google Drive Folder ID")
+            self.lbl_qr.setText("⚠️ ไม่ได้ตั้งค่า Google Drive ไว้\nไฟล์ภาพถูกบันทึกในเครื่องเรียบร้อยแล้ว")
             self.lbl_qr.setStyleSheet("color: #FF5252; font-size: 16px; font-weight: bold;")
             self.lbl_link.setVisible(False)
