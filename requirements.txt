@@ -1,0 +1,7 @@
+PyQt6==6.6.1
+Pillow==10.2.0
+requests==2.31.0
+google-api-python-client==2.111.0
+google-auth-httplib2==0.2.0
+google-auth-oauthlib==1.2.0
+pywin32==306

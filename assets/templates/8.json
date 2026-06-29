@@ -1,0 +1,33 @@
+{
+    "total_photos": 4,
+    "slots": [
+        {
+            "x": 635,
+            "y": 199,
+            "width": 530,
+            "height": 400,
+            "angle": 0.0
+        },
+        {
+            "x": 43,
+            "y": 446,
+            "width": 522,
+            "height": 393,
+            "angle": 0.0
+        },
+        {
+            "x": 632,
+            "y": 807,
+            "width": 537,
+            "height": 396,
+            "angle": 0.0
+        },
+        {
+            "x": 39,
+            "y": 993,
+            "width": 526,
+            "height": 400,
+            "angle": 0.0
+        }
+    ]
+}
