@@ -169,7 +169,7 @@ class SettingWidget(QWidget):
         
         # Full Screen Checkbox
         fs_row = QHBoxLayout()
-        self.chk_fullscreen = QCheckBox("แสดงผลเต็มจอ (Full Screen) - กด F12 เพื่อสลับหน้าจอได้")
+        self.chk_fullscreen = QCheckBox("แสดงผลเต็มจอ (Full Screen) - กด F11 เพื่อสลับหน้าจอได้")
         fs_row.addWidget(self.chk_fullscreen)
         fs_row.addStretch()
         general_layout.addLayout(fs_row)

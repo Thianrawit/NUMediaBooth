@@ -27,3 +27,10 @@ def get_dynamic_path(relative_path: str) -> str:
         base_path = os.path.dirname(os.path.abspath(__file__))
         
     return os.path.join(base_path, relative_path)
+
+def get_documents_path(relative_path: str) -> str:
+    """
+    ดึง Path สำหรับเซฟไฟล์ลงในโฟลเดอร์ Documents/NUMediaBooth ของผู้ใช้
+    """
+    documents_folder = os.path.join(os.path.expanduser('~'), 'Documents', 'NUMediaBooth')
+    return os.path.join(documents_folder, relative_path)

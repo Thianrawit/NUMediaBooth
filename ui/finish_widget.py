@@ -6,8 +6,6 @@ FinishWidget — หน้าเสร็จสิ้นการถ่ายภ
 """
 
 import os
-import qrcode
-from PIL import ImageQt
 from path_manager import get_resource_path
 
 from PyQt6.QtCore import Qt, pyqtSignal, QSize
@@ -28,35 +26,38 @@ import logging
 logger = logging.getLogger(__name__)
 
 class ResponsiveImageLabel(QLabel):
-    """QLabel ที่วาดรูปและรักษาสัดส่วนอัตโนมัติตามขนาดของหน้าต่าง"""
+    """QLabel ที่วาดรูปและรักษาสัดส่วนอัตโนมัติตามขนาดของหน้าต่างโดยไม่เสียสัดส่วน"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self._original_pixmap = None
-        self.setMinimumSize(150, 150) # ขนาดเล็กสุดเพื่อไม่ให้บีบจนสแกนไม่ได้
+        self.setMinimumSize(150, 150)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-    def set_pixmap_preserve_aspect(self, pixmap: QPixmap):
+    def setPixmap(self, pixmap: QPixmap):
         self._original_pixmap = pixmap
         self._update_pixmap()
+        
+    def clear(self):
+        self._original_pixmap = None
+        super().clear()
 
     def _update_pixmap(self):
         if self._original_pixmap and not self._original_pixmap.isNull():
-            # คำนวณให้พอดีกับกล่องและรักษาสัดส่วน
             size = min(self.width(), self.height())
             if size <= 0:
                 return
-                
             scaled = self._original_pixmap.scaled(
                 size, size, 
                 Qt.AspectRatioMode.KeepAspectRatio, 
-                Qt.TransformationMode.FastTransformation # ใช้ Fast กันภาพเบลอตอนขยาย
+                Qt.TransformationMode.FastTransformation
             )
             super().setPixmap(scaled)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._update_pixmap()
+
 
 class FinishWidget(QWidget):
     """
@@ -163,36 +164,18 @@ class FinishWidget(QWidget):
         btn_layout.addWidget(self.btn_back)
         layout.addLayout(btn_layout)
 
-    def setup_finish(self, folder_id: str) -> None:
-        """ตั้งค่า QR Code ตาม Folder ID"""
-        if folder_id:
+    def setup_finish(self, qr_pixmap: QPixmap, folder_id: str) -> None:
+        """ตั้งค่า QR Code ตามข้อมูลที่ได้รับ"""
+        if folder_id and qr_pixmap and not qr_pixmap.isNull():
             drive_url = f"https://drive.google.com/drive/folders/{folder_id}"
             self.lbl_link.setText(drive_url)
             self.lbl_link.setVisible(False)  # ซ่อนลิงก์ไว้ถ้ายาวไป QR ก็พอ
             
-            # สร้าง QR Code
-            qr = qrcode.QRCode(
-                version=1,
-                error_correction=qrcode.constants.ERROR_CORRECT_L,
-                box_size=10,
-                border=2,
-            )
-            qr.add_data(drive_url)
-            qr.make(fit=True)
-            
-            img = qr.make_image(fill_color="black", back_color="white")
-            
-            # ดึงข้อมูลภาพจริงออกมาเป็นโหมด RGB เพื่อให้ PyQt แปลงได้ง่ายๆ
-            pil_image = img.get_image().convert("RGB")
-            
-            # แปลง PIL Image เป็น QPixmap
-            qimage = ImageQt.ImageQt(pil_image)
-            pixmap = QPixmap.fromImage(qimage)
-            
-            # ส่ง Pixmap ต้นฉบับไปให้ ResponsiveImageLabel จัดการย่อขยายเอง
-            self.lbl_qr.set_pixmap_preserve_aspect(pixmap)
-            
+            self.lbl_qr.setPixmap(qr_pixmap)
+            # ลบการตั้งค่า text เพราะมันอาจค้างอยู่ถ้าตั้งค่าทีหลัง
+            self.lbl_qr.setStyleSheet("background: white;")
         else:
-            self.lbl_qr.setText("⚠️ ไม่ได้ตั้งค่า Google Drive ไว้\nไฟล์ภาพถูกบันทึกในเครื่องเรียบร้อยแล้ว")
+            self.lbl_qr.clear()
+            self.lbl_qr.setText("ยังไม่ได้ตั้งค่า Google Drive ในหน้า Setting")
             self.lbl_qr.setStyleSheet("color: #FF5252; font-size: 16px; font-weight: bold;")
             self.lbl_link.setVisible(False)

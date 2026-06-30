@@ -8,4 +8,5 @@ Output/
 .NUMediaBooth_Temp/
 saveSetting/config.json
 .env
-.vscode/
+.vscode/saveSetting/
+crash_log.txt
