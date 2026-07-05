@@ -8,40 +8,88 @@ Template Editor Dialog — หน้าต่างลากวางช่อ�
 
 import os
 import json
+import copy
 import shutil
 import logging
 import math
 
 from PIL import Image, ImageQt
 from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
-from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QPainter, QFont, QTransform, QShortcut, QKeySequence
+from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QPainter, QFont, QTransform, QShortcut, QKeySequence, QIcon
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsObject, QMessageBox, QListWidget, QWidget,
-    QGroupBox, QSlider, QGraphicsPixmapItem
+    QGroupBox, QSlider, QGraphicsPixmapItem, QToolButton, QGraphicsRectItem, QListWidgetItem
 )
-from chroma_key_module import remove_color_background
+from chroma_key_module import remove_color_background, apply_multi_layer_chroma
 
 logger = logging.getLogger(__name__)
 
 
+# ─────────────────── Tool State Constants ───────────────────
+TOOL_NONE = 'none'
+TOOL_PICKER = 'picker'
+TOOL_ZONE = 'zone'
+
+
 class TemplatePixmapItem(QGraphicsPixmapItem):
-    """รูปภาพพื้นหลังที่สามารถดักจับการคลิกเพื่อดูดสีได้"""
+    """รูปภาพพื้นหลังที่สามารถดักจับการคลิกเพื่อดูดสีและวาดโซนได้"""
     def __init__(self, pixmap, dialog, parent=None):
         super().__init__(pixmap, parent)
         self.dialog = dialog
         self.setAcceptHoverEvents(True)
-        self.setCursor(Qt.CursorShape.CrossCursor)
+        # ไม่ set CrossCursor ตลอดเวลาแล้ว — ใช้ tool state แทน
+        self._zone_start = None  # จุดเริ่มต้นสำหรับวาดโซน
+
+    def hoverMoveEvent(self, event):
+        """เปลี่ยน cursor ตาม tool state"""
+        tool = self.dialog.current_tool
+        if tool == TOOL_PICKER:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif tool == TOOL_ZONE:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        else:
+            self.setCursor(Qt.CursorShape.ArrowCursor)
+        super().hoverMoveEvent(event)
 
     def mousePressEvent(self, event):
-        pos = event.pos()
-        x, y = int(pos.x()), int(pos.y())
-        self.dialog.pick_color(x, y)
+        tool = self.dialog.current_tool
+        if tool == TOOL_PICKER:
+            pos = event.pos()
+            x, y = int(pos.x()), int(pos.y())
+            self.dialog.pick_color(x, y)
+            event.accept()
+            return
+        elif tool == TOOL_ZONE:
+            self._zone_start = event.pos()
+            event.accept()
+            return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        tool = self.dialog.current_tool
+        if tool == TOOL_ZONE and self._zone_start is not None:
+            # อัปเดต rubber band preview
+            self.dialog._update_zone_rubber_band(self._zone_start, event.pos())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        tool = self.dialog.current_tool
+        if tool == TOOL_ZONE and self._zone_start is not None:
+            end_pos = event.pos()
+            self.dialog._finish_zone_draw(self._zone_start, end_pos)
+            self._zone_start = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class ResizableRectItem(QGraphicsObject):
     """กล่องสี่เหลี่ยมที่คลิกเลือก, ลาก (Move), ยืดหดขอบ (Resize) และหมุน (Rotate) ได้"""
+    # Signal แจ้งเตือนเมื่อมีการเปลี่ยนตำแหน่ง/ขนาด/หมุนเสร็จ
+    geometry_changed = pyqtSignal()
 
     def __init__(self, rect: QRectF, slot_index: int, parent=None) -> None:
         super().__init__(parent)
@@ -182,7 +230,11 @@ class ResizableRectItem(QGraphicsObject):
 
     def mouseReleaseEvent(self, event) -> None:
         super().mouseReleaseEvent(event)
+        had_handle = self.current_handle is not None
         self.current_handle = None
+        # แจ้ง dialog ว่าเปลี่ยนตำแหน่ง/ขนาด/หมุนเสร็จแล้ว
+        if had_handle or event.button() == Qt.MouseButton.LeftButton:
+            self.geometry_changed.emit()
 
     def _interactive_rotate(self, scene_mouse_pos: QPointF) -> None:
         """คำนวณองศาจากจุดกึ่งกลางกล่องถึงเมาส์ โดยอิงจากพิกัดของ Scene ป้องกันปัญหาหมุนแล้วกระตุก"""
@@ -321,6 +373,21 @@ class TemplateEditorDialog(QDialog):
         self.processed_image = None
         self.bg_item = None
         
+        # ─── Tool State ───
+        self.current_tool = TOOL_NONE
+        
+        # ─── Chroma Key Layer System ───
+        self.chroma_layers: list[dict] = []
+        self._active_layer_index = -1  # index ของ layer ที่กำลัง active
+        self._rubber_band_item: QGraphicsRectItem | None = None  # กรอบ preview ขณะลาก
+        self._updating_sliders = False  # ป้องกัน recursive signal
+        
+        # ─── Undo/Redo History ───
+        self._history: list[dict] = []   # stack เก็บ state snapshots
+        self._history_index = -1         # ตำแหน่งปัจจุบันใน history
+        self._restoring_state = False    # ป้องกัน recursive save ขณะ restore
+        self._max_history = 50           # จำกัดจำนวน history สูงสุด
+        
         self.setObjectName("TemplateEditorDialog")
         # ใช้หน้าต่างแบบ Modal ทับ UI ตัวหลัก
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
@@ -368,6 +435,23 @@ class TemplateEditorDialog(QDialog):
             }
             QPushButton.normal:hover {
                 background-color: #404060;
+            }
+            QToolButton {
+                padding: 8px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: #353550;
+                color: #FFF;
+                border: 2px solid transparent;
+            }
+            QToolButton:hover {
+                background-color: #404060;
+            }
+            QToolButton:checked {
+                background-color: #00CEC9;
+                color: #000;
+                border: 2px solid #00FFF0;
             }
         """)
 
@@ -418,17 +502,71 @@ class TemplateEditorDialog(QDialog):
         grp_chroma.setStyleSheet("QGroupBox { color: white; font-weight: bold; } QLabel { color: #A0A0C0; }")
         chroma_layout = QVBoxLayout(grp_chroma)
         
+        # ── ปุ่มเครื่องมือ ──
+        tools_row = QHBoxLayout()
+        
+        # ปุ่ม Color Picker
+        self.btn_tool_picker = QToolButton()
+        self.btn_tool_picker.setCheckable(True)
+        self.btn_tool_picker.setToolTip("เครื่องมือดูดสี (Color Picker)")
+        # โหลด icon จากไฟล์
+        icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "color-picker.png")
+        if os.path.exists(icon_path):
+            self.btn_tool_picker.setIcon(QIcon(icon_path))
+            self.btn_tool_picker.setIconSize(self.btn_tool_picker.sizeHint())
+        else:
+            self.btn_tool_picker.setText("🎨")
+        self.btn_tool_picker.setFixedSize(44, 44)
+        self.btn_tool_picker.setStyleSheet("""
+            QToolButton {
+                padding: 6px; border-radius: 6px; background-color: #FFF;
+                border: 2px solid #555;
+            }
+            QToolButton:hover { background-color: #E0E0E0; }
+            QToolButton:checked { background-color: #B2DFDB; border: 2px solid #00CEC9; }
+        """)
+        self.btn_tool_picker.clicked.connect(self._on_tool_picker_clicked)
+        tools_row.addWidget(self.btn_tool_picker)
+        
+        # ปุ่ม Draw Zone
+        self.btn_tool_zone = QToolButton()
+        self.btn_tool_zone.setCheckable(True)
+        self.btn_tool_zone.setText("📐 วาดโซน")
+        self.btn_tool_zone.setToolTip("วาดพื้นที่ลบสี (Draw Zone)")
+        self.btn_tool_zone.setFixedHeight(44)
+        self.btn_tool_zone.clicked.connect(self._on_tool_zone_clicked)
+        tools_row.addWidget(self.btn_tool_zone)
+        
+        # ปุ่ม Reset
+        self.btn_chroma_reset = QToolButton()
+        self.btn_chroma_reset.setText("🔄 Reset")
+        self.btn_chroma_reset.setToolTip("ล้างการตั้งค่าลบสีทั้งหมด")
+        self.btn_chroma_reset.setFixedHeight(44)
+        self.btn_chroma_reset.setStyleSheet("""
+            QToolButton {
+                padding: 8px; border-radius: 6px; font-weight: bold; font-size: 13px;
+                background-color: #5C2A2A; color: #FF8A80; border: 2px solid transparent;
+            }
+            QToolButton:hover { background-color: #6E3333; }
+        """)
+        self.btn_chroma_reset.clicked.connect(self._reset_chroma_key)
+        tools_row.addWidget(self.btn_chroma_reset)
+        
+        chroma_layout.addLayout(tools_row)
+        
+        # ── แถวแสดงสีที่เลือก ──
         color_row = QHBoxLayout()
         color_label = QLabel("สีที่เลือก:")
         self.lbl_color_indicator = QLabel()
         self.lbl_color_indicator.setFixedSize(30, 30)
         self.lbl_color_indicator.setStyleSheet("background-color: transparent; border: 1px solid white;")
-        self.lbl_color_rgb = QLabel("(คลิกที่รูปเพื่อดูดสี)")
+        self.lbl_color_rgb = QLabel("(กดปุ่มดูดสี แล้วคลิกที่รูป)")
         color_row.addWidget(color_label)
         color_row.addWidget(self.lbl_color_indicator)
         color_row.addWidget(self.lbl_color_rgb, stretch=1)
         chroma_layout.addLayout(color_row)
         
+        # ── Slider: Tolerance ──
         tol_layout = QHBoxLayout()
         tol_label = QLabel("Tolerance:")
         tol_label.setFixedWidth(70)
@@ -436,12 +574,13 @@ class TemplateEditorDialog(QDialog):
         self.slider_tolerance.setRange(0, 255)
         self.slider_tolerance.setValue(30)
         self.lbl_tol_val = QLabel("30")
-        self.slider_tolerance.valueChanged.connect(lambda v: self.lbl_tol_val.setText(str(v)))
+        self.slider_tolerance.valueChanged.connect(self._on_tolerance_changed)
         tol_layout.addWidget(tol_label)
         tol_layout.addWidget(self.slider_tolerance)
         tol_layout.addWidget(self.lbl_tol_val)
         chroma_layout.addLayout(tol_layout)
         
+        # ── Slider: Edge Crop ──
         edge_layout = QHBoxLayout()
         edge_label = QLabel("Edge Crop:")
         edge_label.setFixedWidth(70)
@@ -449,16 +588,35 @@ class TemplateEditorDialog(QDialog):
         self.slider_edge.setRange(0, 10)
         self.slider_edge.setValue(0)
         self.lbl_edge_val = QLabel("0")
-        self.slider_edge.valueChanged.connect(lambda v: self.lbl_edge_val.setText(str(v)))
+        self.slider_edge.valueChanged.connect(self._on_edge_crop_changed)
         edge_layout.addWidget(edge_label)
         edge_layout.addWidget(self.slider_edge)
         edge_layout.addWidget(self.lbl_edge_val)
         chroma_layout.addLayout(edge_layout)
         
-        self.btn_preview = QPushButton("👀 พรีวิวตัดพื้นหลัง")
-        self.btn_preview.setProperty("cssClass", "normal")
-        self.btn_preview.clicked.connect(self._preview_chroma_key)
-        chroma_layout.addWidget(self.btn_preview)
+        # ── Chroma Layer List ──
+        layer_header = QHBoxLayout()
+        lbl_layers = QLabel("🎨 Layer สีที่ลบ:")
+        lbl_layers.setStyleSheet("color: #B0B0D0; font-weight: bold;")
+        
+        self.btn_del_layer = QPushButton("❌")
+        self.btn_del_layer.setFixedSize(30, 30)
+        self.btn_del_layer.setToolTip("ลบ Layer ที่เลือก")
+        self.btn_del_layer.setStyleSheet("background-color: #5C2A2A; color: #FF8A80; border-radius: 4px; padding: 0; font-size: 14px;")
+        self.btn_del_layer.clicked.connect(self._delete_active_layer)
+        
+        layer_header.addWidget(lbl_layers)
+        layer_header.addStretch()
+        layer_header.addWidget(self.btn_del_layer)
+        chroma_layout.addLayout(layer_header)
+        
+        self.list_chroma_layers = QListWidget()
+        self.list_chroma_layers.setStyleSheet(
+            "background-color: #242438; color: white; border: none; border-radius: 8px; padding: 4px; font-size: 13px;"
+        )
+        self.list_chroma_layers.setMaximumHeight(120)
+        self.list_chroma_layers.currentRowChanged.connect(self._on_chroma_layer_selected)
+        chroma_layout.addWidget(self.list_chroma_layers)
         
         left_layout.addWidget(grp_chroma)
         left_layout.addSpacing(20)
@@ -485,7 +643,56 @@ class TemplateEditorDialog(QDialog):
         zoom_layout.addWidget(btn_zoom_in)
         zoom_layout.addStretch()
         left_layout.addLayout(zoom_layout)
-        left_layout.addSpacing(20)
+        left_layout.addSpacing(10)
+
+        # Undo/Redo Controls
+        undo_redo_layout = QHBoxLayout()
+        
+        self.btn_undo = QToolButton()
+        self.btn_undo.setToolTip("ย้อนกลับ (Ctrl+Z)")
+        undo_icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "undo.png")
+        if os.path.exists(undo_icon_path):
+            self.btn_undo.setIcon(QIcon(undo_icon_path))
+            self.btn_undo.setIconSize(self.btn_undo.sizeHint())
+        else:
+            self.btn_undo.setText("↩ Undo")
+        self.btn_undo.setFixedSize(44, 44)
+        self.btn_undo.setEnabled(False)
+        self.btn_undo.setStyleSheet("""
+            QToolButton {
+                padding: 6px; border-radius: 6px; background-color: #353550;
+                border: 2px solid #555; 
+            }
+            QToolButton:hover { background-color: #404060; }
+            QToolButton:disabled { background-color: #252535; border: 2px solid #333; }
+        """)
+        self.btn_undo.clicked.connect(self._undo)
+        undo_redo_layout.addWidget(self.btn_undo)
+        
+        self.btn_redo = QToolButton()
+        self.btn_redo.setToolTip("ย้อนคืน (Ctrl+Shift+Z)")
+        redo_icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "redo.png")
+        if os.path.exists(redo_icon_path):
+            self.btn_redo.setIcon(QIcon(redo_icon_path))
+            self.btn_redo.setIconSize(self.btn_redo.sizeHint())
+        else:
+            self.btn_redo.setText("↪ Redo")
+        self.btn_redo.setFixedSize(44, 44)
+        self.btn_redo.setEnabled(False)
+        self.btn_redo.setStyleSheet("""
+            QToolButton {
+                padding: 6px; border-radius: 6px; background-color: #353550;
+                border: 2px solid #555;
+            }
+            QToolButton:hover { background-color: #404060; }
+            QToolButton:disabled { background-color: #252535; border: 2px solid #333; }
+        """)
+        self.btn_redo.clicked.connect(self._redo)
+        undo_redo_layout.addWidget(self.btn_redo)
+        
+        undo_redo_layout.addStretch()
+        left_layout.addLayout(undo_redo_layout)
+        left_layout.addSpacing(10)
 
         self.btn_save = QPushButton("💾 บันทึก Template")
         self.btn_save.setProperty("cssClass", "primary")
@@ -513,6 +720,11 @@ class TemplateEditorDialog(QDialog):
         QShortcut(QKeySequence("Ctrl+="), self).activated.connect(self.view.zoom_in)
         QShortcut(QKeySequence("Ctrl+-"), self).activated.connect(self.view.zoom_out)
         QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self.view.reset_zoom)
+        # Shortcut Escape เพื่อยกเลิกเครื่องมือ
+        QShortcut(QKeySequence("Escape"), self).activated.connect(self._deactivate_tool)
+        # Shortcuts for Undo/Redo
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._undo)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(self._redo)
         
         # Checkerboard background
         checker_size = 15
@@ -525,6 +737,57 @@ class TemplateEditorDialog(QDialog):
         self.view.setBackgroundBrush(QBrush(bg_pixmap))
         
         layout.addWidget(self.view, stretch=1)
+
+    # ═══════════════════════════════════════════════════
+    #  Tool State Management
+    # ═══════════════════════════════════════════════════
+
+    def _on_tool_picker_clicked(self):
+        """สลับเครื่องมือ Color Picker"""
+        if self.btn_tool_picker.isChecked():
+            self.current_tool = TOOL_PICKER
+            self.btn_tool_zone.setChecked(False)
+            self._set_slots_interactive(False)
+        else:
+            self._deactivate_tool()
+
+    def _on_tool_zone_clicked(self):
+        """สลับเครื่องมือ Draw Zone — ต้องเคยดูดสีมาก่อนอย่างน้อย 1 ครั้ง"""
+        if self.btn_tool_zone.isChecked():
+            # ต้องมีสีที่เคยดูดไว้ (จาก active layer หรือ target_rgb)
+            has_color = self.target_rgb is not None
+            if not has_color and self.chroma_layers:
+                has_color = True  # มี layer อยู่แล้ว ใช้สีจาก layer ได้
+            if not has_color:
+                QMessageBox.warning(self, "แจ้งเตือน", "กรุณาดูดสีก่อนอย่างน้อย 1 ครั้ง จึงจะวาดโซนได้\n(กดปุ่มดูดสี แล้วคลิกที่รูป)")
+                self.btn_tool_zone.setChecked(False)
+                return
+            self.current_tool = TOOL_ZONE
+            self.btn_tool_picker.setChecked(False)
+            self._set_slots_interactive(False)
+        else:
+            self._deactivate_tool()
+
+    def _deactivate_tool(self):
+        """คืนสถานะเมาส์กลับเป็นปกติ"""
+        self.current_tool = TOOL_NONE
+        self.btn_tool_picker.setChecked(False)
+        self.btn_tool_zone.setChecked(False)
+        self._set_slots_interactive(True)
+        # ลบ rubber band ถ้ามี
+        if self._rubber_band_item:
+            self.scene.removeItem(self._rubber_band_item)
+            self._rubber_band_item = None
+
+    def _set_slots_interactive(self, enabled: bool):
+        """Toggle flags ของ Slot ทั้งหมด เพื่อป้องกัน event ตีกัน"""
+        for item in self.slots:
+            item.setFlag(QGraphicsObject.GraphicsItemFlag.ItemIsSelectable, enabled)
+            item.setFlag(QGraphicsObject.GraphicsItemFlag.ItemIsMovable, enabled)
+
+    # ═══════════════════════════════════════════════════
+    #  Image Loading & Pixmap Update
+    # ═══════════════════════════════════════════════════
 
     def _load_image(self) -> None:
         """โหลดรูปภาพ Template มาเป็นพื้นหลังของ Canvas และโหลดพิกัดเดิมถ้ามี"""
@@ -551,6 +814,7 @@ class TemplateEditorDialog(QDialog):
                 with open(json_path, "r", encoding="utf-8") as f:
                     config = json.load(f)
                 
+                # โหลด Slots
                 for slot in config.get("slots", []):
                     self.slot_counter += 1
                     x = slot.get("x", 0)
@@ -564,58 +828,45 @@ class TemplateEditorDialog(QDialog):
                     rect = QRectF(x, y, w, h)
                     item = ResizableRectItem(rect, self.slot_counter)
                     item.setRotation(angle)
+                    item.geometry_changed.connect(self._on_slot_geometry_changed)
                     
                     self.scene.addItem(item)
                     self.slots.append(item)
                     self.list_slots.addItem(f"📷 Slot {self.slot_counter}")
+                
+                # โหลด Chroma Layers (ถ้ามี — backward compatible)
+                for layer_data in config.get("chroma_layers", []):
+                    color = tuple(layer_data.get("color", [0, 0, 0]))
+                    rect_data = layer_data.get("rect")
+                    roi = tuple(rect_data) if rect_data else None
+                    tol = layer_data.get("tolerance", 30)
+                    edge = layer_data.get("edge_crop", 0)
+                    
+                    layer = {
+                        "color": color,
+                        "rect": roi,
+                        "tolerance": tol,
+                        "edge_crop": edge,
+                        "rect_item": None
+                    }
+                    
+                    # สร้าง QGraphicsRectItem สำหรับ ROI ถ้ามี
+                    if roi:
+                        rect_item = self._create_roi_rect_item(roi)
+                        layer["rect_item"] = rect_item
+                    
+                    self.chroma_layers.append(layer)
+                    self._add_layer_list_item(layer)
+                
+                # Apply chroma layers ถ้ามี
+                if self.chroma_layers:
+                    self._apply_all_chroma_layers()
                     
             except Exception as e:
                 logger.error("โหลดไฟล์ JSON เดิมไม่สำเร็จ: %s", e)
-
-    def _add_slot(self) -> None:
-        """เพิ่มกล่อง (Slot) ใหม่ลงบนจอ"""
-        # วางกล่องขนาดเริ่มต้นไว้ตรงกลางๆ
-        cx = self.pixmap.width() / 2 - 200
-        cy = self.pixmap.height() / 2 - 150
-        rect = QRectF(cx, cy, 400, 300)
         
-        self.slot_counter += 1
-        item = ResizableRectItem(rect, self.slot_counter)
-        
-        self.scene.addItem(item)
-        self.slots.append(item)
-        self.list_slots.addItem(f"📷 Slot {self.slot_counter}")
-        
-        # เลือกกล่องให้ทันที
-        self.scene.clearSelection()
-        item.setSelected(True)
-        
-    def _delete_slot(self) -> None:
-        """ลบกล่อง (Slot) ที่ถูกเลือกอยู่"""
-        selected_items = self.scene.selectedItems()
-        if not selected_items:
-            QMessageBox.warning(self, "แจ้งเตือน", "กรุณาคลิกเลือก Slot ที่ต้องการลบก่อน")
-            return
-            
-        item = selected_items[0]
-        if item in self.slots:
-            idx = self.slots.index(item)
-            self.scene.removeItem(item)
-            self.slots.pop(idx)
-            self.list_slots.takeItem(idx)
-
-    def _on_scene_selection_changed(self) -> None:
-        """เมื่อคลิกเลือกของใน scene ให้ไฮไลต์รายการใน list ด้วย"""
-        selected_items = self.scene.selectedItems()
-        if selected_items and selected_items[0] in self.slots:
-            idx = self.slots.index(selected_items[0])
-            self.list_slots.setCurrentRow(idx)
-            
-    def _on_list_item_selected(self, row: int) -> None:
-        """เมื่อจิ้มรายการใน list ให้ไฮไลต์กล่องใน scene ด้วย"""
-        if row >= 0 and row < len(self.slots):
-            self.scene.clearSelection()
-            self.slots[row].setSelected(True)
+        # บันทึกสถานะเริ่มต้นสำหรับ Undo/Redo
+        self._save_state()
 
     def _update_pixmap(self):
         """อัปเดต QPixmap จาก self.processed_image"""
@@ -630,8 +881,67 @@ class TemplateEditorDialog(QDialog):
         self.bg_item.setZValue(-1)
         self.scene.addItem(self.bg_item)
 
+    # ═══════════════════════════════════════════════════
+    #  Slot Management (เหมือนเดิม)
+    # ═══════════════════════════════════════════════════
+
+    def _add_slot(self) -> None:
+        """เพิ่มกล่อง (Slot) ใหม่ลงบนจอ"""
+        # วางกล่องขนาดเริ่มต้นไว้ตรงกลางๆ
+        cx = self.pixmap.width() / 2 - 200
+        cy = self.pixmap.height() / 2 - 150
+        rect = QRectF(cx, cy, 400, 300)
+        
+        self.slot_counter += 1
+        item = ResizableRectItem(rect, self.slot_counter)
+        item.geometry_changed.connect(self._on_slot_geometry_changed)
+        
+        self.scene.addItem(item)
+        self.slots.append(item)
+        self.list_slots.addItem(f"📷 Slot {self.slot_counter}")
+        
+        # เลือกกล่องให้ทันที
+        self.scene.clearSelection()
+        item.setSelected(True)
+        
+        self._save_state()
+        
+    def _delete_slot(self) -> None:
+        """ลบกล่อง (Slot) ที่ถูกเลือกอยู่"""
+        selected_items = self.scene.selectedItems()
+        if not selected_items:
+            QMessageBox.warning(self, "แจ้งเตือน", "กรุณาคลิกเลือก Slot ที่ต้องการลบก่อน")
+            return
+            
+        item = selected_items[0]
+        if item in self.slots:
+            idx = self.slots.index(item)
+            self.scene.removeItem(item)
+            self.slots.pop(idx)
+            self.list_slots.takeItem(idx)
+            self._save_state()
+
+    def _on_scene_selection_changed(self) -> None:
+        """เมื่อคลิกเลือกของใน scene ให้ไฮไลต์รายการใน list ด้วย"""
+        selected_items = self.scene.selectedItems()
+        if selected_items and selected_items[0] in self.slots:
+            idx = self.slots.index(selected_items[0])
+            self.list_slots.setCurrentRow(idx)
+            
+    def _on_list_item_selected(self, row: int) -> None:
+        """เมื่อจิ้มรายการใน list ให้ไฮไลต์กล่องใน scene ด้วย"""
+        if row >= 0 and row < len(self.slots):
+            self.scene.clearSelection()
+            self.slots[row].setSelected(True)
+        # ซ่อนกรอบ ROI ทั้งหมดเมื่อเลือก Slot
+        self._hide_all_roi_rects()
+
+    # ═══════════════════════════════════════════════════
+    #  Chroma Key: Color Picking
+    # ═══════════════════════════════════════════════════
+
     def pick_color(self, x: int, y: int):
-        """ดูดสีจากตำแหน่ง x, y ของรูปต้นฉบับ"""
+        """ดูดสีจากตำแหน่ง x, y ของรูปต้นฉบับ แล้วสร้าง Layer ใหม่"""
         if self.original_image is None:
             return
             
@@ -640,39 +950,438 @@ class TemplateEditorDialog(QDialog):
             r, g, b, a = self.original_image.getpixel((x, y))
             self.target_rgb = (r, g, b)
             
-            # อัปเดต UI
+            # อัปเดต UI แสดงสี
+            hex_color = f"#{r:02x}{g:02x}{b:02x}"
+            self.lbl_color_indicator.setStyleSheet(f"background-color: {hex_color}; border: 1px solid white;")
+            self.lbl_color_rgb.setText(f"RGB: ({r}, {g}, {b})")
+            
+            # สร้าง Layer ใหม่
+            layer = {
+                "color": (r, g, b),
+                "rect": None,        # None = ลบทั้งภาพ (default)
+                "tolerance": self.slider_tolerance.value(),
+                "edge_crop": self.slider_edge.value(),
+                "rect_item": None
+            }
+            self.chroma_layers.append(layer)
+            self._add_layer_list_item(layer)
+            
+            # เลือก layer ใหม่ทันที
+            self.list_chroma_layers.setCurrentRow(len(self.chroma_layers) - 1)
+            
+            # คืนเครื่องมือเป็นปกติ
+            self._deactivate_tool()
+            
+            # Real-time preview
+            self._apply_all_chroma_layers()
+            self._save_state()
+
+    # ═══════════════════════════════════════════════════
+    #  Chroma Key: Zone Drawing (ROI)
+    # ═══════════════════════════════════════════════════
+
+    def _update_zone_rubber_band(self, start: QPointF, current: QPointF):
+        """แสดง rubber band preview ขณะลากวาดโซน"""
+        x1, y1 = start.x(), start.y()
+        x2, y2 = current.x(), current.y()
+        rect = QRectF(min(x1, x2), min(y1, y2), abs(x2 - x1), abs(y2 - y1))
+        
+        if self._rubber_band_item is None:
+            self._rubber_band_item = QGraphicsRectItem(rect)
+            self._rubber_band_item.setPen(QPen(QColor(0, 200, 255, 180), 2, Qt.PenStyle.DashLine))
+            self._rubber_band_item.setBrush(QBrush(QColor(0, 200, 255, 30)))
+            self._rubber_band_item.setZValue(10)  # อยู่บนสุดขณะวาด
+            self.scene.addItem(self._rubber_band_item)
+        else:
+            self._rubber_band_item.setRect(rect)
+
+    def _finish_zone_draw(self, start: QPointF, end: QPointF):
+        """วาดโซนเสร็จ — สร้าง Layer ใหม่ด้วยสีปัจจุบัน + ROI ที่วาด (วาดได้หลายโซน)"""
+        # ลบ rubber band
+        if self._rubber_band_item:
+            self.scene.removeItem(self._rubber_band_item)
+            self._rubber_band_item = None
+        
+        # คำนวณ ROI rect
+        x1, y1 = start.x(), start.y()
+        x2, y2 = end.x(), end.y()
+        rx = int(min(x1, x2))
+        ry = int(min(y1, y2))
+        rw = int(abs(x2 - x1))
+        rh = int(abs(y2 - y1))
+        
+        # ขนาดต้องไม่เล็กเกินไป
+        if rw < 10 or rh < 10:
+            self._deactivate_tool()
+            return
+        
+        roi = (rx, ry, rw, rh)
+        
+        # หาสีที่จะใช้: จาก active layer หรือ target_rgb
+        color = None
+        if 0 <= self._active_layer_index < len(self.chroma_layers):
+            color = self.chroma_layers[self._active_layer_index]["color"]
+        elif self.target_rgb:
+            color = self.target_rgb
+        
+        if color is None:
+            self._deactivate_tool()
+            return
+        
+        # สร้าง Layer ใหม่ด้วยสีเดียวกัน + ROI ที่วาด
+        rect_item = self._create_roi_rect_item(roi)
+        rect_item.setVisible(True)  # แสดงกรอบทันที เพราะเป็น layer ที่กำลัง active
+        
+        new_layer = {
+            "color": color,
+            "rect": roi,
+            "tolerance": self.slider_tolerance.value(),
+            "edge_crop": self.slider_edge.value(),
+            "rect_item": rect_item
+        }
+        self.chroma_layers.append(new_layer)
+        self._add_layer_list_item(new_layer)
+        
+        # เลือก layer ใหม่ทันที
+        self.list_chroma_layers.setCurrentRow(len(self.chroma_layers) - 1)
+        
+        # ไม่ deactivate tool — ให้ยังอยู่ในโหมด zone เพื่อวาดต่อได้เลย!
+        
+        # Real-time preview
+        self._apply_all_chroma_layers()
+
+    def _create_roi_rect_item(self, roi: tuple) -> QGraphicsRectItem:
+        """สร้าง QGraphicsRectItem สำหรับแสดงกรอบ ROI บน Canvas"""
+        rx, ry, rw, rh = roi
+        rect_item = QGraphicsRectItem(QRectF(rx, ry, rw, rh))
+        rect_item.setPen(QPen(QColor(0, 180, 255, 200), 2, Qt.PenStyle.DashDotLine))
+        rect_item.setBrush(QBrush(QColor(0, 180, 255, 20)))
+        rect_item.setZValue(-0.5)  # อยู่ระหว่าง background กับ Slot
+        rect_item.setVisible(False)  # ค่าเริ่มต้น: ซ่อน
+        # ไม่ให้ลากหรือเลือกได้ — ป้องกันตีกับ Slot
+        rect_item.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsSelectable, False)
+        rect_item.setFlag(QGraphicsRectItem.GraphicsItemFlag.ItemIsMovable, False)
+        self.scene.addItem(rect_item)
+        return rect_item
+
+    # ═══════════════════════════════════════════════════
+    #  Chroma Key: Layer Management
+    # ═══════════════════════════════════════════════════
+
+    def _add_layer_list_item(self, layer: dict):
+        """เพิ่ม item ใน list_chroma_layers จาก layer data"""
+        r, g, b = layer["color"]
+        roi = layer["rect"]
+        zone_text = "ทั้งภาพ" if roi is None else f"โซน ({roi[0]},{roi[1]})"
+        text = f"■ RGB({r},{g},{b}) — {zone_text}"
+        
+        item = QListWidgetItem(text)
+        item.setForeground(QColor(r, g, b))
+        self.list_chroma_layers.addItem(item)
+
+    def _update_layer_list_item_text(self, index: int, layer: dict):
+        """อัปเดตข้อความของ item ใน list"""
+        if 0 <= index < self.list_chroma_layers.count():
+            r, g, b = layer["color"]
+            roi = layer["rect"]
+            zone_text = "ทั้งภาพ" if roi is None else f"โซน ({roi[0]},{roi[1]})"
+            text = f"■ RGB({r},{g},{b}) — {zone_text}"
+            self.list_chroma_layers.item(index).setText(text)
+
+    def _on_chroma_layer_selected(self, row: int):
+        """เมื่อเลือก layer ใน list → อัปเดต UI"""
+        self._active_layer_index = row
+        
+        # ซ่อนกรอบ ROI ทั้งหมดก่อน
+        self._hide_all_roi_rects()
+        
+        if 0 <= row < len(self.chroma_layers):
+            layer = self.chroma_layers[row]
+            
+            # แสดงกรอบ ROI ของ layer ที่เลือก (ถ้ามี)
+            if layer["rect_item"]:
+                layer["rect_item"].setVisible(True)
+            
+            # อัปเดต Slider ให้ตรงกับค่าของ layer นี้
+            self._updating_sliders = True
+            self.slider_tolerance.setValue(layer["tolerance"])
+            self.slider_edge.setValue(layer["edge_crop"])
+            self._updating_sliders = False
+            
+            # อัปเดต color indicator
+            r, g, b = layer["color"]
             hex_color = f"#{r:02x}{g:02x}{b:02x}"
             self.lbl_color_indicator.setStyleSheet(f"background-color: {hex_color}; border: 1px solid white;")
             self.lbl_color_rgb.setText(f"RGB: ({r}, {g}, {b})")
 
-    def _preview_chroma_key(self):
-        """ประมวลผลลบพื้นหลังชั่วคราว"""
-        if not self.target_rgb:
-            QMessageBox.warning(self, "แจ้งเตือน", "กรุณาคลิกเลือกสีพื้นหลังที่ต้องการลบก่อน")
+    def _delete_active_layer(self):
+        """ลบ layer ที่กำลัง active"""
+        idx = self._active_layer_index
+        if idx < 0 or idx >= len(self.chroma_layers):
+            QMessageBox.warning(self, "แจ้งเตือน", "กรุณาเลือก Layer สีที่ต้องการลบก่อน")
             return
+        
+        layer = self.chroma_layers[idx]
+        
+        # ลบ graphics item ของ ROI (ถ้ามี)
+        if layer["rect_item"]:
+            self.scene.removeItem(layer["rect_item"])
+        
+        self.chroma_layers.pop(idx)
+        self.list_chroma_layers.takeItem(idx)
+        self._active_layer_index = -1
+        
+        # Real-time preview
+        self._apply_all_chroma_layers()
+        self._save_state()
+
+    def _hide_all_roi_rects(self):
+        """ซ่อนกรอบ ROI ทั้งหมด"""
+        for layer in self.chroma_layers:
+            if layer["rect_item"]:
+                layer["rect_item"].setVisible(False)
+
+    # ═══════════════════════════════════════════════════
+    #  Chroma Key: Slider Events → Real-time
+    # ═══════════════════════════════════════════════════
+
+    def _on_tolerance_changed(self, value: int):
+        """Slider Tolerance เปลี่ยน → อัปเดต active layer + real-time preview"""
+        self.lbl_tol_val.setText(str(value))
+        if self._updating_sliders:
+            return
+        if 0 <= self._active_layer_index < len(self.chroma_layers):
+            self.chroma_layers[self._active_layer_index]["tolerance"] = value
+            self._apply_all_chroma_layers()
+
+    def _on_edge_crop_changed(self, value: int):
+        """Slider Edge Crop เปลี่ยน → อัปเดต active layer + real-time preview"""
+        self.lbl_edge_val.setText(str(value))
+        if self._updating_sliders:
+            return
+        if 0 <= self._active_layer_index < len(self.chroma_layers):
+            self.chroma_layers[self._active_layer_index]["edge_crop"] = value
+            self._apply_all_chroma_layers()
+
+    # ═══════════════════════════════════════════════════
+    #  Chroma Key: Processing & Preview
+    # ═══════════════════════════════════════════════════
+
+    def _apply_all_chroma_layers(self):
+        """ประมวลผลลบพื้นหลังจากทุก Layer แล้วอัปเดตภาพ Real-time"""
+        if self.original_image is None:
+            return
+        
+        if not self.chroma_layers:
+            # ไม่มี layer → แสดงภาพต้นฉบับ
+            self.processed_image = self.original_image.copy()
+        else:
+            # สร้าง list ของ layer data (ไม่รวม rect_item)
+            layers_data = []
+            for layer in self.chroma_layers:
+                layers_data.append({
+                    "color": layer["color"],
+                    "rect": layer["rect"],
+                    "tolerance": layer["tolerance"],
+                    "edge_crop": layer["edge_crop"]
+                })
             
-        self.btn_preview.setText("กำลังประมวลผล...")
-        self.btn_preview.setEnabled(False)
-        self.repaint() # บังคับให้ UI อัปเดต
+            self.processed_image = apply_multi_layer_chroma(
+                self.original_image, layers_data
+            )
+        
+        self._update_pixmap()
+
+    # ═══════════════════════════════════════════════════
+    #  Undo/Redo History
+    # ═══════════════════════════════════════════════════
+
+    def _capture_snapshot(self) -> dict:
+        """จับ snapshot ของสถานะปัจจุบัน (slots + chroma layers)"""
+        slots_data = []
+        for item in self.slots:
+            cx = item.pos().x()
+            cy = item.pos().y()
+            slots_data.append({
+                "slot_index": item.slot_index,
+                "cx": cx,
+                "cy": cy,
+                "w": item.w,
+                "h": item.h,
+                "angle": item.rotation()
+            })
+        
+        layers_data = []
+        for layer in self.chroma_layers:
+            layers_data.append({
+                "color": layer["color"],
+                "rect": layer["rect"],
+                "tolerance": layer["tolerance"],
+                "edge_crop": layer["edge_crop"]
+            })
+        
+        return {
+            "slot_counter": self.slot_counter,
+            "slots": slots_data,
+            "chroma_layers": layers_data,
+            "target_rgb": self.target_rgb
+        }
+
+    def _save_state(self):
+        """บันทึก state ปัจจุบันลง history stack"""
+        if self._restoring_state:
+            return
+        
+        snapshot = self._capture_snapshot()
+        
+        # ตัด history หลัง index ปัจจุบันออก (เพราะ redo ไม่ใช้แล้ว)
+        self._history = self._history[:self._history_index + 1]
+        self._history.append(snapshot)
+        
+        # จำกัดขนาด history
+        if len(self._history) > self._max_history:
+            self._history = self._history[-self._max_history:]
+        
+        self._history_index = len(self._history) - 1
+        self._update_undo_redo_buttons()
+
+    def _undo(self):
+        """ย้อนกลับ 1 step"""
+        if self._history_index <= 0:
+            return
+        self._history_index -= 1
+        self._restore_state(self._history[self._history_index])
+
+    def _redo(self):
+        """ย้อนคืน 1 step"""
+        if self._history_index >= len(self._history) - 1:
+            return
+        self._history_index += 1
+        self._restore_state(self._history[self._history_index])
+
+    def _restore_state(self, snapshot: dict):
+        """คืนสถานะจาก snapshot"""
+        self._restoring_state = True
         
         try:
-            tol = self.slider_tolerance.value()
-            edge = self.slider_edge.value()
+            # --- คืนค่า Slots ---
+            # ลบ slots เก่าทั้งหมด
+            for item in self.slots:
+                self.scene.removeItem(item)
+            self.slots.clear()
+            self.list_slots.clear()
             
-            # ลบพื้นหลังและอัปเดตบนหน้าจอ
-            self.processed_image = remove_color_background(
-                self.original_image, 
-                self.target_rgb, 
-                tol, 
-                edge
-            )
-            self._update_pixmap()
+            self.slot_counter = snapshot["slot_counter"]
             
-        except Exception as e:
-            QMessageBox.critical(self, "ข้อผิดพลาด", f"ประมวลผลล้มเหลว: {e}")
+            for s in snapshot["slots"]:
+                rect = QRectF(
+                    s["cx"] - s["w"] / 2,
+                    s["cy"] - s["h"] / 2,
+                    s["w"],
+                    s["h"]
+                )
+                item = ResizableRectItem(rect, s["slot_index"])
+                item.setRotation(s["angle"])
+                item.geometry_changed.connect(self._on_slot_geometry_changed)
+                self.scene.addItem(item)
+                self.slots.append(item)
+                self.list_slots.addItem(f"📷 Slot {s['slot_index']}")
+            
+            # --- คืนค่า Chroma Layers ---
+            # ลบ ROI graphics items เก่า
+            for layer in self.chroma_layers:
+                if layer["rect_item"]:
+                    self.scene.removeItem(layer["rect_item"])
+            self.chroma_layers.clear()
+            self.list_chroma_layers.clear()
+            
+            self.target_rgb = snapshot["target_rgb"]
+            
+            for l_data in snapshot["chroma_layers"]:
+                layer = {
+                    "color": l_data["color"],
+                    "rect": l_data["rect"],
+                    "tolerance": l_data["tolerance"],
+                    "edge_crop": l_data["edge_crop"],
+                    "rect_item": None
+                }
+                if l_data["rect"]:
+                    layer["rect_item"] = self._create_roi_rect_item(l_data["rect"])
+                self.chroma_layers.append(layer)
+                self._add_layer_list_item(layer)
+            
+            self._active_layer_index = -1
+            
+            # อัปเดต color indicator
+            if self.target_rgb:
+                r, g, b = self.target_rgb
+                hex_color = f"#{r:02x}{g:02x}{b:02x}"
+                self.lbl_color_indicator.setStyleSheet(f"background-color: {hex_color}; border: 1px solid white;")
+                self.lbl_color_rgb.setText(f"RGB: ({r}, {g}, {b})")
+            else:
+                self.lbl_color_indicator.setStyleSheet("background-color: transparent; border: 1px solid white;")
+                self.lbl_color_rgb.setText("(กดปุ่มดูดสี แล้วคลิกที่รูป)")
+            
+            # รีเซ็ต sliders
+            self._updating_sliders = True
+            self.slider_tolerance.setValue(30)
+            self.slider_edge.setValue(0)
+            self._updating_sliders = False
+            
+            # Re-apply chroma layers
+            self._apply_all_chroma_layers()
+        
         finally:
-            self.btn_preview.setText("👀 พรีวิวตัดพื้นหลัง")
-            self.btn_preview.setEnabled(True)
+            self._restoring_state = False
+            self._update_undo_redo_buttons()
+
+    def _on_slot_geometry_changed(self):
+        """เมื่อ Slot ถูกย้าย/ยืดหด/หมุนเสร็จ ให้บันทึก state"""
+        self._save_state()
+
+    def _update_undo_redo_buttons(self):
+        """อัปเดตสถานะ enabled/disabled ของปุ่ม Undo/Redo"""
+        self.btn_undo.setEnabled(self._history_index > 0)
+        self.btn_redo.setEnabled(self._history_index < len(self._history) - 1)
+
+    # ═══════════════════════════════════════════════════
+    #  Chroma Key: Reset
+    # ═══════════════════════════════════════════════════
+
+    def _reset_chroma_key(self):
+        """ล้างการตั้งค่าลบสีทั้งหมด คืนภาพต้นฉบับ"""
+        # ลบ graphics items ของ ROI ทั้งหมด
+        for layer in self.chroma_layers:
+            if layer["rect_item"]:
+                self.scene.removeItem(layer["rect_item"])
+        
+        # ล้าง data
+        self.chroma_layers.clear()
+        self.list_chroma_layers.clear()
+        self._active_layer_index = -1
+        self.target_rgb = None
+        
+        # รีเซ็ต Slider
+        self._updating_sliders = True
+        self.slider_tolerance.setValue(30)
+        self.slider_edge.setValue(0)
+        self._updating_sliders = False
+        
+        # รีเซ็ต color indicator
+        self.lbl_color_indicator.setStyleSheet("background-color: transparent; border: 1px solid white;")
+        self.lbl_color_rgb.setText("(กดปุ่มดูดสี แล้วคลิกที่รูป)")
+        
+        # คืนเครื่องมือเป็นปกติ
+        self._deactivate_tool()
+        
+        # คืนภาพต้นฉบับ
+        if self.original_image:
+            self.processed_image = self.original_image.copy()
+            self._update_pixmap()
+
+    # ═══════════════════════════════════════════════════
+    #  Save Template
+    # ═══════════════════════════════════════════════════
 
     def _save_template(self) -> None:
         """ดึงพิกัดกล่องทั้งหมด เซฟเป็น JSON และคัดลอกไฟล์รูปเข้าโปรเจกต์"""
@@ -719,11 +1428,24 @@ class TemplateEditorDialog(QDialog):
                     "angle": round(angle, 2)
                 })
 
-            # 3. เซฟเป็นไฟล์ .json
+            # 3. เก็บ Chroma Layers
+            chroma_data = []
+            for layer in self.chroma_layers:
+                chroma_data.append({
+                    "color": list(layer["color"]),
+                    "rect": list(layer["rect"]) if layer["rect"] else None,
+                    "tolerance": layer["tolerance"],
+                    "edge_crop": layer["edge_crop"]
+                })
+
+            # 4. เซฟเป็นไฟล์ .json
             config = {
                 "total_photos": len(self.slots),
                 "slots": slots_data
             }
+            # เพิ่ม chroma_layers เฉพาะเมื่อมีข้อมูล
+            if chroma_data:
+                config["chroma_layers"] = chroma_data
 
             with open(dest_json_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4)

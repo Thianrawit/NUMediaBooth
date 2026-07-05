@@ -11,7 +11,7 @@ import json
 import logging
 
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
-from PyQt6.QtGui import QPixmap, QFont, QIcon
+from PyQt6.QtGui import QPixmap, QFont, QIcon, QColor
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -119,6 +119,9 @@ class TemplateSelectWidget(QWidget):
             self.templates_dir = templates_dir
 
         self._arrange_mode = False
+
+        # Keyboard Navigation (Arcade Mode)
+        self.current_selected_index = 0
 
         self._init_ui()
         self.refresh_templates()
@@ -237,6 +240,7 @@ class TemplateSelectWidget(QWidget):
     # ------------------------------------------------------------------
 
     def keyPressEvent(self, event):
+        # Ctrl+/- zoom (เดิม)
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             if event.key() == Qt.Key.Key_Equal or event.key() == Qt.Key.Key_Plus:
                 self.zoom_in()
@@ -246,7 +250,65 @@ class TemplateSelectWidget(QWidget):
                 self.GRID_COLUMNS = 4
                 self.config_manager.set("template_grid_columns", self.GRID_COLUMNS)
                 self.resizeEvent(None)
-        super().keyPressEvent(event)
+            event.accept()
+            return
+
+        # Arcade Navigation
+        total = self.list_widget.count()
+        if total == 0:
+            event.accept()
+            return
+            
+        key = event.key()
+        key_right = self.config_manager.get_key_binding("right")
+        key_left = self.config_manager.get_key_binding("left")
+        key_confirm = self.config_manager.get_key_binding("confirm")
+        key_back = self.config_manager.get_key_binding("back")
+
+        if key == key_right:
+            self.current_selected_index = (self.current_selected_index + 1) % total
+            self._update_selector_ui()
+        elif key == key_left:
+            self.current_selected_index = (self.current_selected_index - 1 + total) % total
+            self._update_selector_ui()
+        elif key == key_confirm:
+            # เลือก Template ตัวปัจจุบันแล้วไปหน้าถัดไป
+            if 0 <= self.current_selected_index < total:
+                item = self.list_widget.item(self.current_selected_index)
+                self.list_widget.setCurrentItem(item)
+                if not self._arrange_mode:
+                    self._on_next_clicked()
+        elif key == key_back:
+            self.back_clicked.emit()
+        
+        event.accept()
+
+    def _update_selector_ui(self):
+        """ไฮไลต์ Template ที่เลือกอยู่ด้วยขอบสีเขียวหนา และเลื่อน scroll ตามไปด้วย"""
+        total = self.list_widget.count()
+        if total == 0:
+            return
+            
+        # Clamp index
+        self.current_selected_index = max(0, min(self.current_selected_index, total - 1))
+        
+        for i in range(total):
+            item = self.list_widget.item(i)
+            if i == self.current_selected_index:
+                item.setBackground(QColor("#4A4A6A"))
+                # ใช้ setCurrentItem เพื่อให้ QListWidget ไฮไลต์ + scroll ตาม
+                self.list_widget.setCurrentItem(item)
+                self.list_widget.scrollToItem(item)
+            else:
+                item.setBackground(QColor("#353550"))
+                
+        # อัปเดตข้อความด้านล่าง
+        selected_item = self.list_widget.item(self.current_selected_index)
+        if selected_item:
+            name = selected_item.data(Qt.ItemDataRole.UserRole + 2) or selected_item.text()
+            self.label_selected.setText(f"✅ เลือก: {name}")
+            self.label_selected.setStyleSheet("color: #00E676; font-size: 13px;")
+            self.btn_next.setEnabled(True)
         
     def wheelEvent(self, event):
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -295,6 +357,7 @@ class TemplateSelectWidget(QWidget):
         self.btn_next.setEnabled(False)
         self.label_selected.setText("ยังไม่ได้เลือก Template")
         self.label_selected.setStyleSheet("")
+        self.current_selected_index = 0
         
         os.makedirs(self.templates_dir, exist_ok=True)
         

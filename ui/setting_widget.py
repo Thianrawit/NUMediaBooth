@@ -37,6 +37,7 @@ from ui.template_editor_dialog import TemplateEditorDialog
 from PyQt6.QtWidgets import QCheckBox, QApplication
 from config_manager import ConfigManager
 from ui.raw_images_dialog import RawImagesDialog
+from auto_updater import CURRENT_VERSION
 from path_manager import get_resource_path, get_dynamic_path
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,84 @@ def _get_system_printers() -> list[str]:
 
     return printers
 
+
+class KeyBindButton(QPushButton):
+    """ปุ่มสำหรับรับค่าคีย์ลัดจากผู้ใช้
+    
+    เมื่อคลิก จะเข้าสู่โหมดรอรับปุ่ม (listening mode)
+    เมื่อผู้ใช้กดปุ่มบนคีย์บอร์ด จะบันทึกค่าลง config ทันที
+    """
+    
+    def __init__(self, action_name: str, current_key: int, config_manager, parent=None):
+        super().__init__(parent)
+        self.action_name = action_name
+        self.current_key = current_key
+        self.config_manager = config_manager
+        self._listening = False
+        
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._update_display()
+        self.clicked.connect(self._start_listening)
+        
+    def _key_to_name(self, key_value: int) -> str:
+        """แปลงค่า Qt.Key int เป็นชื่อปุ่มที่อ่านได้"""
+        from PyQt6.QtGui import QKeySequence
+        name = QKeySequence(key_value).toString()
+        if not name:
+            # กรณีปุ่มพิเศษที่ QKeySequence แปลงไม่ได้
+            special_keys = {
+                16777220: "Enter",
+                16777221: "Numpad Enter",
+                16777216: "Escape",
+                16777235: "Up",
+                16777237: "Down",
+                16777234: "Left",
+                16777236: "Right",
+                32: "Space",
+            }
+            name = special_keys.get(key_value, f"Key({key_value})")
+        return name
+        
+    def _update_display(self):
+        """อัปเดตข้อความบนปุ่มให้แสดงชื่อปุ่มปัจจุบัน"""
+        name = self._key_to_name(self.current_key)
+        self.setText(f"🎮  {name}")
+        self.setStyleSheet(
+            "background-color: #353550; color: white; border: 2px solid #555; "
+            "border-radius: 6px; padding: 4px 12px; font-size: 13px;"
+        )
+        
+    def _start_listening(self):
+        """เข้าสู่โหมดรอรับปุ่ม"""
+        self._listening = True
+        self.setText("⌨️  กดปุ่มที่ต้องการ...")
+        self.setStyleSheet(
+            "background-color: #FF6B2B; color: white; border: 2px solid #FF6B2B; "
+            "border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: bold;"
+        )
+        self.setFocus()
+        
+    def keyPressEvent(self, event):
+        """จับปุ่มที่ผู้ใช้กดเมื่ออยู่ในโหมด listening"""
+        if self._listening:
+            new_key = event.key()
+            self.current_key = new_key
+            self._listening = False
+            self._update_display()
+            
+            # บันทึกลง config ทันที
+            self.config_manager.set_key_binding(self.action_name, new_key)
+            logger.info("เปลี่ยนคีย์ลัด %s เป็น %s", self.action_name, self._key_to_name(new_key))
+            event.accept()
+            return
+        super().keyPressEvent(event)
+        
+    def focusOutEvent(self, event):
+        """ถ้าผู้ใช้คลิกออกจากปุ่มโดยไม่กดอะไร ให้ยกเลิกโหมด listening"""
+        if self._listening:
+            self._listening = False
+            self._update_display()
+        super().focusOutEvent(event)
 
 class SettingWidget(QWidget):
     """หน้าตั้งค่าหลัก
@@ -456,6 +535,46 @@ class SettingWidget(QWidget):
 
         content_layout.addWidget(grp_template)
 
+        # ========== Group 6: Key Bindings ==========
+        grp_keybind = QGroupBox("")
+        keybind_layout = QVBoxLayout(grp_keybind)
+        self._add_group_header(keybind_layout, get_resource_path(os.path.join("image", "normalSetting.png")), "ตั้งค่าคีย์ลัด (Key Bindings)")
+
+        keybind_hint = QLabel(
+            "คลิกที่ปุ่มแล้วกดปุ่มบนคีย์บอร์ดที่ต้องการเพื่อเปลี่ยนคีย์ลัด\n"
+            "ใช้สำหรับควบคุมโปรแกรมด้วยปุ่มกดแบบตู้ Arcade"
+        )
+        keybind_hint.setProperty("cssClass", "muted")
+        keybind_hint.setWordWrap(True)
+        keybind_layout.addWidget(keybind_hint)
+
+        # สร้าง KeyBindButton สำหรับแต่ละ action
+        self.key_bind_buttons = {}
+        key_actions = [
+            ("confirm", "ปุ่มยืนยัน (Confirm / Enter)"),
+            ("back", "ปุ่มย้อนกลับ (Back / Escape)"),
+            ("left", "ปุ่มซ้าย (Left)"),
+            ("right", "ปุ่มขวา (Right)"),
+        ]
+
+        for action_name, label_text in key_actions:
+            row = QHBoxLayout()
+            lbl = QLabel(label_text)
+            lbl.setMinimumWidth(250)
+            row.addWidget(lbl)
+
+            current_key_value = self.config_manager.get_key_binding(action_name)
+            btn = KeyBindButton(action_name, current_key_value, self.config_manager)
+            btn.setFixedHeight(36)
+            btn.setMinimumWidth(200)
+            row.addWidget(btn)
+            row.addStretch()
+
+            self.key_bind_buttons[action_name] = btn
+            keybind_layout.addLayout(row)
+
+        content_layout.addWidget(grp_keybind)
+
         # Spacer ด้านล่าง
         content_layout.addStretch()
 
@@ -464,6 +583,12 @@ class SettingWidget(QWidget):
 
         # ---------- Bottom Bar (ปุ่มบันทึก) ----------
         bottom_bar = QHBoxLayout()
+        
+        # แสดงเวอร์ชันโปรแกรม
+        version_label = QLabel(f"เวอร์ชัน: {CURRENT_VERSION}")
+        version_label.setStyleSheet("color: #888888; font-size: 12px;")
+        bottom_bar.addWidget(version_label)
+        
         bottom_bar.addStretch()
 
         self.btn_save = QPushButton("💾  บันทึกการตั้งค่า")
@@ -792,7 +917,7 @@ class SettingWidget(QWidget):
             # อัปเดตในช่อง input เพื่อให้ผู้ใช้เห็นว่าโดนตัดเหลือแค่ ID
             self.input_gdrive_id.setText(gdrive_id_text)
 
-        return {
+        settings = {
             "fullscreen": self.chk_fullscreen.isChecked(),
             "export_path": self.input_export_path.text().strip(),
             "gdrive_folder_id": gdrive_id_text,
@@ -802,6 +927,12 @@ class SettingWidget(QWidget):
             "print_copies": self.spin_copies.value(),
             "camera_name": camera_name,
         }
+        
+        # เพิ่มค่า Key Bindings
+        for action_name, btn in self.key_bind_buttons.items():
+            settings[f"key_{action_name}"] = btn.current_key
+            
+        return settings
 
     def set_settings(self, settings: dict) -> None:
         """ใส่ค่า settings จาก dict (ใช้ตอนโหลดค่าจาก config file)
@@ -840,6 +971,13 @@ class SettingWidget(QWidget):
             idx = self.combo_camera.findText(settings["camera_name"])
             if idx >= 0:
                 self.combo_camera.setCurrentIndex(idx)
+
+        # อัปเดต Key Bindings ใน UI
+        for action_name, btn in self.key_bind_buttons.items():
+            key_name = f"key_{action_name}"
+            if key_name in settings:
+                btn.current_key = settings[key_name]
+                btn._update_display()
 
     # ------------------------------------------------------------------
     # Template Management

@@ -21,7 +21,12 @@ class ConfigManager:
         "gdrive_folder_id": "",
         "printer_name": "",
         "camera_name": "",
-        "admin_password": "1234"
+        "admin_password": "1234",
+        # Key Bindings (เก็บเป็น int ของ Qt.Key enum เพราะ JSON ไม่รองรับ Enum)
+        "key_confirm": 16777220,  # Qt.Key.Key_Return (Enter)
+        "key_back": 16777216,     # Qt.Key.Key_Escape
+        "key_left": 16777234,     # Qt.Key.Key_Left
+        "key_right": 16777236,    # Qt.Key.Key_Right
     }
 
     def __init__(self, config_path: str = None) -> None:
@@ -75,3 +80,30 @@ class ConfigManager:
     def get_all(self) -> dict:
         """ดึงค่าคอนฟิกทั้งหมดเพื่อส่งให้ UI"""
         return self.config.copy()
+
+    # ------------------------------------------------------------------
+    # Key Binding Helpers
+    # ------------------------------------------------------------------
+
+    def get_key_binding(self, action: str) -> int:
+        """ดึงค่า Key Binding สำหรับ action ที่กำหนด
+        
+        Args:
+            action: ชื่อ action เช่น 'confirm', 'back', 'up', 'down', 'left', 'right'
+        Returns:
+            int ค่า Qt.Key enum
+        """
+        key_name = f"key_{action}"
+        default = self.DEFAULT_CONFIG.get(key_name, 0)
+        return self.config.get(key_name, default)
+
+    def set_key_binding(self, action: str, key_value: int) -> None:
+        """ตั้งค่า Key Binding สำหรับ action ที่กำหนด แล้วเซฟทันที
+        
+        Args:
+            action: ชื่อ action เช่น 'confirm', 'back'
+            key_value: ค่า int ของ Qt.Key enum
+        """
+        key_name = f"key_{action}"
+        self.config[key_name] = key_value
+        self.save()

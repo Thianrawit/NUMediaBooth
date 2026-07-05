@@ -14,7 +14,7 @@ import os
 import logging
 
 from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon, QKeySequence, QPixmap
+from PyQt6.QtGui import QFont, QIcon, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QMainWindow,
     QStackedWidget,
@@ -125,6 +125,10 @@ class MainWindow(QMainWindow):
         self.home_widget.admin_password = self.config_manager.get("admin_password", "1234")
 
         self._connect_signals()
+
+        # Global Shortcut สำหรับ F11 เต็มจอทุกหน้า
+        self.f11_shortcut = QShortcut(QKeySequence(Qt.Key.Key_F11), self)
+        self.f11_shortcut.activated.connect(self._toggle_fullscreen)
 
         # เริ่มที่หน้า Home
         self.navigate_to(PAGE_HOME)
@@ -285,9 +289,6 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
     
     def keyPressEvent(self, event):
-        """กด F11 เพื่อสลับหน้าจอ Fullscreen"""
-        if event.key() == Qt.Key.Key_F11:
-            self._toggle_fullscreen()
         super().keyPressEvent(event)
         
     def _toggle_fullscreen(self):

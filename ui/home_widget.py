@@ -22,6 +22,7 @@ from PyQt6.QtWidgets import (
     QGraphicsDropShadowEffect,
 )
 from path_manager import get_resource_path
+from config_manager import ConfigManager
 
 
 class ClickableLabel(QLabel):
@@ -50,6 +51,9 @@ class HomeWidget(QWidget):
         self._setting_timer.setInterval(2000) # 2 วินาที
         self._setting_timer.setSingleShot(True)
         self._setting_timer.timeout.connect(self._reset_setting_clicks)
+        
+        # โหลดคีย์ลัดจาก Config
+        self.config_manager = ConfigManager()
         
         # โทนสี: ส้ม เทา ขาว ดำ
         # เน้นความเรียบง่าย พื้นขาวสะอาดตา
@@ -155,6 +159,22 @@ class HomeWidget(QWidget):
 
         # ดันข้างล่างขึ้นมาให้ปุ่มอยู่ตรงกลางเป๊ะๆ
         root_layout.addStretch(1)
+
+    # ------------------------------------------------------------------
+    # Keyboard Navigation (Arcade Mode)
+    # ------------------------------------------------------------------
+
+    def keyPressEvent(self, event):
+        """รับคีย์ลัดสำหรับโหมด Arcade"""
+        key = event.key()
+        key_confirm = self.config_manager.get_key_binding("confirm")
+        
+        if key == key_confirm:
+            self.start_clicked.emit()
+            event.accept()
+            return
+        
+        event.accept()
 
     def _on_settings_clicked(self) -> None:
         """ตรวจสอบการกด 5 ครั้งติดกัน ก่อนตรวจสอบรหัสผ่าน"""

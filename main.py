@@ -10,12 +10,13 @@ import logging
 import time
 
 from PyQt6.QtWidgets import QApplication, QSplashScreen
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtGui import QIcon, QPixmap
 
 from ui import MainWindow
 from logger_setup import setup_logger
 from path_manager import get_dynamic_path, get_resource_path
+from auto_updater import AutoUpdater
 
 def main() -> None:
     """จุดเริ่มต้นของโปรแกรม"""
@@ -79,6 +80,11 @@ def main() -> None:
     splash.finish(window)
 
     logger.info("NUMediaBooth พร้อมใช้งาน!")
+    
+    # 5. เช็คอัปเดตอัตโนมัติ (รันหลังจาก UI หลักโหลดเสร็จไปแล้ว 1 วินาที เพื่อไม่ให้โปรแกรมเปิดช้า)
+    window.updater = AutoUpdater(window)
+    QTimer.singleShot(1000, window.updater.check_for_updates)
+
     sys.exit(app.exec())
 
 
