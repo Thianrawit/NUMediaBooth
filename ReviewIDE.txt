@@ -1,0 +1,11 @@
+=== Review: ปรับ Version โปรแกรมเป็น 1.5 ===
+วันที่: 2026-09-11
+
+ไฟล์ที่แก้ไข:
+1. auto_updater.py:
+   - อัปเดต CURRENT_VERSION จาก "v1.4" เป็น "v1.5" (ใช้แสดงผลเวอร์ชันในหน้า Settings และใช้เช็ค Auto-Update)
+2. auto_updater2.py:
+   - อัปเดต CURRENT_VERSION จาก "v1.4" เป็น "v1.5"
+3. setup.iss:
+   - อัปเดต AppVersion เป็น 1.5
+   - อัปเดต OutputBaseFilename เป็น NUMediaBooth_Installer_v1.5

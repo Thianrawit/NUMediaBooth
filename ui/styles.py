@@ -260,6 +260,45 @@ QGroupBox::title {{
     color: {PRIMARY};
 }}
 
+/* ===== QCheckBox ===== */
+QCheckBox {{
+    background: transparent;
+    color: {TEXT_PRIMARY};
+    spacing: 8px;
+    font-size: 14px;
+}}
+
+QCheckBox::indicator {{
+    width: 18px;
+    height: 18px;
+    border: 2px solid {BORDER};
+    border-radius: 4px;
+    background-color: {BG_INPUT};
+}}
+
+QCheckBox::indicator:checked {{
+    background-color: {PRIMARY};
+    border-color: {PRIMARY};
+}}
+
+QCheckBox::indicator:hover {{
+    border-color: {PRIMARY};
+}}
+
+/* ===== QSpinBox ===== */
+QSpinBox {{
+    background-color: {BG_INPUT};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER};
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 14px;
+}}
+
+QSpinBox:focus {{
+    border-color: {BORDER_FOCUS};
+}}
+
 /* ===== Template Card (สำหรับหน้าเลือก Template) ===== */
 QPushButton[cssClass="template-card"] {{
     background-color: {BG_CARD};

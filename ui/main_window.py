@@ -123,6 +123,7 @@ class MainWindow(QMainWindow):
         
         # ส่งรหัสผ่านจาก config ให้ HomeWidget เผื่อต้องการเปลี่ยน
         self.home_widget.admin_password = self.config_manager.get("admin_password", "1234")
+        self.home_widget.password_enabled = self.config_manager.get("password_enabled", True)
 
         self._connect_signals()
 
@@ -478,6 +479,10 @@ class MainWindow(QMainWindow):
         
         # บันทึกลงไฟล์ config.json
         self.config_manager.update(settings)
+        
+        # อัปเดตค่ารหัสผ่านไป HomeWidget
+        self.home_widget.admin_password = settings.get("admin_password", "1234")
+        self.home_widget.password_enabled = settings.get("password_enabled", True)
         
         # ปรับหน้าจอตามที่ตั้ง
         if settings.get("fullscreen", False):

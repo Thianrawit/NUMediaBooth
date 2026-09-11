@@ -535,7 +535,56 @@ class SettingWidget(QWidget):
 
         content_layout.addWidget(grp_template)
 
-        # ========== Group 6: Key Bindings ==========
+        # ========== Group 6: Password Settings ==========
+        grp_password = QGroupBox("")
+        password_layout = QVBoxLayout(grp_password)
+        self._add_group_header(password_layout, get_resource_path(os.path.join("image", "key.png")), "ตั้งรหัสผ่านโปรแกรม")
+
+        # Checkbox เปิด/ปิดรหัสผ่าน
+        self.chk_password_enabled = QCheckBox("ตั้งค่ารหัสผ่าน (เมื่อเปิดใช้งาน จะต้องกรอกรหัสผ่านทุกครั้งที่เข้าหน้าตั้งค่า)")
+        self.chk_password_enabled.setChecked(True)
+        self.chk_password_enabled.stateChanged.connect(self._on_password_toggle)
+        password_layout.addWidget(self.chk_password_enabled)
+
+        # ช่องใส่รหัสผ่าน (แสดงเมื่อ checkbox ติ๊ก)
+        self.password_input_widget = QWidget()
+        self.password_input_widget.setStyleSheet("QWidget { background: transparent; }")
+        pw_input_layout = QHBoxLayout(self.password_input_widget)
+        pw_input_layout.setContentsMargins(0, 4, 0, 4)
+
+        pw_label = QLabel("รหัสผ่าน:")
+        pw_label.setFixedWidth(100)
+        pw_input_layout.addWidget(pw_label)
+
+        self.input_admin_password = QLineEdit()
+        self.input_admin_password.setPlaceholderText("กรอกรหัสผ่านสำหรับเข้าหน้าตั้งค่า...")
+        self.input_admin_password.setEchoMode(QLineEdit.EchoMode.Password)
+        pw_input_layout.addWidget(self.input_admin_password, stretch=1)
+
+        # ปุ่มแสดง/ซ่อนรหัสผ่าน
+        self._icon_eye = QIcon(get_resource_path(os.path.join("image", "eye.png")))
+        self._icon_hidden = QIcon(get_resource_path(os.path.join("image", "hidden.png")))
+
+        self.btn_toggle_pw_visibility = QPushButton()
+        self.btn_toggle_pw_visibility.setIcon(self._icon_hidden)
+        self.btn_toggle_pw_visibility.setIconSize(QSize(20, 20))
+        self.btn_toggle_pw_visibility.setFixedSize(40, 40)
+        self.btn_toggle_pw_visibility.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_toggle_pw_visibility.setStyleSheet("background-color: #FFFFFF; border-radius: 8px; border: none;")
+        self.btn_toggle_pw_visibility.setToolTip("แสดง/ซ่อนรหัสผ่าน")
+        self.btn_toggle_pw_visibility.clicked.connect(self._toggle_password_visibility)
+        pw_input_layout.addWidget(self.btn_toggle_pw_visibility)
+
+        password_layout.addWidget(self.password_input_widget)
+
+        pw_hint = QLabel("หากไม่ติ๊กเปิดใช้รหัสผ่าน การกดปุ่มตั้งค่า 5 ครั้งจะเข้าหน้าตั้งค่าได้เลยทันที โดยไม่ต้องกรอกรหัส")
+        pw_hint.setProperty("cssClass", "muted")
+        pw_hint.setWordWrap(True)
+        password_layout.addWidget(pw_hint)
+
+        content_layout.addWidget(grp_password)
+
+        # ========== Group 7: Key Bindings ==========
         grp_keybind = QGroupBox("")
         keybind_layout = QVBoxLayout(grp_keybind)
         self._add_group_header(keybind_layout, get_resource_path(os.path.join("image", "normalSetting.png")), "ตั้งค่าคีย์ลัด (Key Bindings)")
@@ -607,6 +656,20 @@ class SettingWidget(QWidget):
     # ------------------------------------------------------------------
     # Actions
     # ------------------------------------------------------------------
+
+    def _on_password_toggle(self, state) -> None:
+        """แสดง/ซ่อนช่องใส่รหัสผ่านตาม checkbox"""
+        is_enabled = self.chk_password_enabled.isChecked()
+        self.password_input_widget.setVisible(is_enabled)
+
+    def _toggle_password_visibility(self) -> None:
+        """สลับแสดง/ซ่อนรหัสผ่านในช่อง input"""
+        if self.input_admin_password.echoMode() == QLineEdit.EchoMode.Password:
+            self.input_admin_password.setEchoMode(QLineEdit.EchoMode.Normal)
+            self.btn_toggle_pw_visibility.setIcon(self._icon_eye)
+        else:
+            self.input_admin_password.setEchoMode(QLineEdit.EchoMode.Password)
+            self.btn_toggle_pw_visibility.setIcon(self._icon_hidden)
 
     def _browse_export_path(self) -> None:
         """เปิด Dialog เลือกโฟลเดอร์สำหรับเซฟรูปรวม"""
@@ -926,6 +989,8 @@ class SettingWidget(QWidget):
             "media_type": self.combo_media_type.currentText(),
             "print_copies": self.spin_copies.value(),
             "camera_name": camera_name,
+            "password_enabled": self.chk_password_enabled.isChecked(),
+            "admin_password": self.input_admin_password.text().strip() or "1234",
         }
         
         # เพิ่มค่า Key Bindings
@@ -978,6 +1043,13 @@ class SettingWidget(QWidget):
             if key_name in settings:
                 btn.current_key = settings[key_name]
                 btn._update_display()
+
+        # อัปเดตค่ารหัสผ่าน
+        if "password_enabled" in settings:
+            self.chk_password_enabled.setChecked(settings["password_enabled"])
+            self.password_input_widget.setVisible(settings["password_enabled"])
+        if "admin_password" in settings:
+            self.input_admin_password.setText(settings["admin_password"])
 
     # ------------------------------------------------------------------
     # Template Management

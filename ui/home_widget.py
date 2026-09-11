@@ -44,6 +44,7 @@ class HomeWidget(QWidget):
         super().__init__(parent)
         self.setObjectName("HomeWidget")
         self.admin_password = "1234"
+        self.password_enabled = True  # เปิดใช้รหัสผ่านหรือไม่
         
         # ตัวแปรสำหรับการกดปุ่มซ้ำ 5 ครั้ง
         self._setting_click_count = 0
@@ -185,6 +186,11 @@ class HomeWidget(QWidget):
         if self._setting_click_count >= 5:
             self._setting_timer.stop()
             self._setting_click_count = 0
+            
+            # ถ้าไม่ได้เปิดใช้รหัสผ่าน ก็เข้าตั้งค่าได้เลย
+            if not self.password_enabled:
+                self.settings_clicked.emit()
+                return
             
             password, ok = QInputDialog.getText(
                 self,

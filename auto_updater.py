@@ -14,7 +14,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
-CURRENT_VERSION = "v1.4"
+CURRENT_VERSION = "v1.5"
 API_URL = "https://api.github.com/repos/Thianrawit/NUMediaBooth/releases/latest"
 
 # GitHub บังคับว่าต้องมี User-Agent ไม่งั้นบางทีโดน reject เฉยๆ แบบงงๆ
