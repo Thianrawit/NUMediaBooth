@@ -1,11 +1,27 @@
-=== Review: ปรับ Version โปรแกรมเป็น 1.5 ===
-วันที่: 2026-09-11
+== Review: แก้ไข Auto Update Error & ปรับเวอร์ชัน 1.6 ==
+วันที่: 2026-09-12
 
-ไฟล์ที่แก้ไข:
-1. auto_updater.py:
-   - อัปเดต CURRENT_VERSION จาก "v1.4" เป็น "v1.5" (ใช้แสดงผลเวอร์ชันในหน้า Settings และใช้เช็ค Auto-Update)
-2. auto_updater2.py:
-   - อัปเดต CURRENT_VERSION จาก "v1.4" เป็น "v1.5"
-3. setup.iss:
-   - อัปเดต AppVersion เป็น 1.5
-   - อัปเดต OutputBaseFilename เป็น NUMediaBooth_Installer_v1.5
+ปัญหาเดิม:
+1. Installer error "There is not enough space on the disk" — เกิดจากโปรแกรมยังเปิดอยู่ lock ไฟล์ + ดิสก์ปลายทางเต็ม
+2. Tcl _tcl_data not found — เกิดจาก installer ทำงานไม่เสร็จ extract ได้ครึ่งเดียว
+
+การแก้ไข:
+1. auto_updater.py
+   - เพิ่ม _get_current_install_dir() เช็คพื้นที่ดิสก์ปลายทางก่อนรัน installer
+   - เปลี่ยนลำดับ: แจ้ง user → รัน installer ด้วย /SILENT /CLOSEAPPLICATIONS → ปิดแอป
+   - ใช้ DETACHED_PROCESS ให้ installer ทำงานอิสระจาก parent
+   - import ctypes สำหรับ creationflags
+   - อัปเดต CURRENT_VERSION = "v1.6"
+
+2. auto_updater2.py
+   - อัปเดต CURRENT_VERSION = "v1.6"
+
+3. setup.iss
+   - ปรับ AppVersion=1.6
+   - ปรับ OutputBaseFilename=NUMediaBooth_Installer_v1.6
+   - เพิ่ม CloseApplications=force กัน file lock
+   - เพิ่ม CloseApplicationsFilter=*.exe
+   - เพิ่ม RestartApplications=yes เปิดแอปใหม่หลังติดตั้งเสร็จ
+
+4. Git
+   - Commit และ Push การเปลี่ยนแปลงทั้งหมดขึ้น GitHub

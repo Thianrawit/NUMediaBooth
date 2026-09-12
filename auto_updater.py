@@ -4,6 +4,7 @@ import shutil
 import hashlib
 import logging
 import subprocess
+import ctypes
 from pathlib import Path
 
 import requests
@@ -14,7 +15,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
-CURRENT_VERSION = "v1.5"
+CURRENT_VERSION = "v1.6"
 API_URL = "https://api.github.com/repos/Thianrawit/NUMediaBooth/releases/latest"
 
 # GitHub บังคับว่าต้องมี User-Agent ไม่งั้นบางทีโดน reject เฉยๆ แบบงงๆ
@@ -429,9 +430,37 @@ class AutoUpdater:
 
         logger.info("ดาวน์โหลดเสร็จสิ้น รันตัวติดตั้ง: %s", save_path)
 
+        # เช็คพื้นที่ดิสก์ปลายทาง (install dir) ด้วย ไม่ใช่แค่ temp
+        install_dir = self._get_current_install_dir()
+        if install_dir:
+            installer_size = os.path.getsize(save_path)
+            # ประมาณขนาดหลัง extract ≈ 3x ของ installer (ถูก compress ด้วย LZMA)
+            estimated_extracted = installer_size * 3
+            if not check_disk_space(install_dir, estimated_extracted):
+                QMessageBox.critical(
+                    self.parent_widget, "พื้นที่ดิสก์ไม่พอ",
+                    f"พื้นที่ดิสก์ที่โฟลเดอร์ติดตั้ง ({install_dir}) ไม่เพียงพอ\n"
+                    f"ต้องการอย่างน้อย {estimated_extracted / (1024*1024):.0f} MB\n\n"
+                    "กรุณาลบไฟล์ที่ไม่จำเป็นแล้วลองใหม่"
+                )
+                return
+
+        # ⚡ บอก user ก่อนว่าจะปิดโปรแกรมแล้วติดตั้ง
+        QMessageBox.information(
+            self.parent_widget, "สำเร็จ",
+            "ดาวน์โหลดเสร็จสิ้น โปรแกรมจะปิดตัวลงเพื่อทำการติดตั้ง!"
+        )
+
         try:
-            # ไม่ใช้ shell=True ป้องกัน command injection และปัญหา escaping path
-            subprocess.Popen([save_path])
+            # 🔥 ต้องรัน installer ให้เด้งขึ้นมาก่อน แล้วค่อยปิดแอป
+            # ใช้ /SILENT เพื่อ auto-install + /CLOSEAPPLICATIONS เพื่อปิดโปรแกรมตัวเก่า
+            # DETACHED_PROCESS ให้ installer ทำงานอิสระจาก parent process
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen(
+                [save_path, '/SILENT', '/CLOSEAPPLICATIONS'],
+                creationflags=DETACHED_PROCESS,
+                close_fds=True,
+            )
         except OSError as e:
             logger.error("รันตัวติดตั้งไม่สำเร็จ: %s", e)
             QMessageBox.critical(
@@ -439,15 +468,22 @@ class AutoUpdater:
                 f"ดาวน์โหลดเสร็จแล้ว แต่รันตัวติดตั้งไม่สำเร็จ:\n{e}\n\n"
                 f"กรุณาเปิดไฟล์ด้วยตนเองที่:\n{save_path}"
             )
-            # รันตัวติดตั้งไม่ได้ อย่าเพิ่งปิดโปรแกรม ให้ user จัดการเอง
             return
 
-        QMessageBox.information(
-            self.parent_widget, "สำเร็จ",
-            "ดาวน์โหลดเสร็จสิ้น โปรแกรมจะปิดตัวลงเพื่อทำการติดตั้ง!"
-        )
+        # ⚡ ปิดแอปทันทีเพื่อปลดล็อคไฟล์ให้ installer ทำงานได้
+        logger.info("ปิดแอปเพื่อให้ installer ทำงาน...")
         QApplication.quit()
-        sys.exit()
+        sys.exit(0)
+
+    def _get_current_install_dir(self) -> str:
+        """หา path โฟลเดอร์ที่โปรแกรมถูกติดตั้งอยู่ (สำหรับเช็คพื้นที่ดิสก์)"""
+        try:
+            if getattr(sys, 'frozen', False):
+                return os.path.dirname(sys.executable)
+            else:
+                return os.path.dirname(os.path.abspath(__file__))
+        except Exception:
+            return ""
 
     def _on_download_error(self, error_msg: str):
         self._is_downloading = False
