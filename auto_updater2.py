@@ -157,17 +157,30 @@ class AutoUpdater:
             self.progress_dialog.close()
             
         logger.info(f"ดาวน์โหลดเสร็จสิ้น รันตัวติดตั้ง: {save_path}")
-        QMessageBox.information(self.parent_widget, "สำเร็จ", "ดาวน์โหลดเสร็จสิ้น โปรแกรมจะปิดตัวลงเพื่อทำการติดตั้ง!")
         
         try:
-            # สั่งรันไฟล์ Installer
-            subprocess.Popen([save_path], shell=True)
+            # 🔥 รัน installer แบบ DETACHED ให้ทำงานอิสระจาก parent process
+            # /SILENT = ติดตั้งอัตโนมัติ, /CLOSEAPPLICATIONS = ปิดโปรแกรมตัวเก่า
+            DETACHED_PROCESS = 0x00000008
+            subprocess.Popen(
+                [save_path, '/SILENT', '/CLOSEAPPLICATIONS'],
+                creationflags=DETACHED_PROCESS,
+                close_fds=True,
+            )
         except Exception as e:
             logger.error(f"Failed to start installer: {e}")
+            QMessageBox.critical(
+                self.parent_widget, "ข้อผิดพลาด",
+                f"ดาวน์โหลดเสร็จแล้ว แต่รันตัวติดตั้งไม่สำเร็จ:\n{e}\n\n"
+                f"กรุณาเปิดไฟล์ด้วยตนเองที่:\n{save_path}"
+            )
+            return
             
-        # ปิดโปรแกรมเพื่อหลีกทางให้ Installer
+        # ⚡ ปิดแอปทันทีเลย ไม่ต้องรอ user กดอะไร
+        # เพื่อปลดล็อคไฟล์ให้ installer ทำงานได้โดยไม่ error
+        logger.info("ปิดแอปทันทีเพื่อให้ installer ทำงาน...")
         QApplication.quit()
-        sys.exit()
+        sys.exit(0)
 
     def _on_download_error(self, error_msg):
         if self.progress_dialog:

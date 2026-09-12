@@ -434,7 +434,6 @@ class AutoUpdater:
         install_dir = self._get_current_install_dir()
         if install_dir:
             installer_size = os.path.getsize(save_path)
-            # ประมาณขนาดหลัง extract ≈ 3x ของ installer (ถูก compress ด้วย LZMA)
             estimated_extracted = installer_size * 3
             if not check_disk_space(install_dir, estimated_extracted):
                 QMessageBox.critical(
@@ -445,16 +444,9 @@ class AutoUpdater:
                 )
                 return
 
-        # ⚡ บอก user ก่อนว่าจะปิดโปรแกรมแล้วติดตั้ง
-        QMessageBox.information(
-            self.parent_widget, "สำเร็จ",
-            "ดาวน์โหลดเสร็จสิ้น โปรแกรมจะปิดตัวลงเพื่อทำการติดตั้ง!"
-        )
-
         try:
-            # 🔥 ต้องรัน installer ให้เด้งขึ้นมาก่อน แล้วค่อยปิดแอป
-            # ใช้ /SILENT เพื่อ auto-install + /CLOSEAPPLICATIONS เพื่อปิดโปรแกรมตัวเก่า
-            # DETACHED_PROCESS ให้ installer ทำงานอิสระจาก parent process
+            # 🔥 รัน installer แบบ DETACHED ให้ทำงานอิสระจาก parent process
+            # /SILENT = ติดตั้งอัตโนมัติ, /CLOSEAPPLICATIONS = ปิดโปรแกรมตัวเก่า
             DETACHED_PROCESS = 0x00000008
             subprocess.Popen(
                 [save_path, '/SILENT', '/CLOSEAPPLICATIONS'],
@@ -470,8 +462,9 @@ class AutoUpdater:
             )
             return
 
-        # ⚡ ปิดแอปทันทีเพื่อปลดล็อคไฟล์ให้ installer ทำงานได้
-        logger.info("ปิดแอปเพื่อให้ installer ทำงาน...")
+        # ⚡ ปิดแอปทันทีเลย ไม่ต้องรอ user กดอะไร
+        # เพื่อปลดล็อคไฟล์ให้ installer ทำงานได้โดยไม่ error
+        logger.info("ปิดแอปทันทีเพื่อให้ installer ทำงาน...")
         QApplication.quit()
         sys.exit(0)
 
