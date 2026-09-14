@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QMessageBox,
+    QDialog,
 )
 
 from image_composer import merge_photobooth

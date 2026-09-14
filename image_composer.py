@@ -100,11 +100,8 @@ def validate_layout_config(layout_config: dict, photo_count: int) -> None:
             f"'slots' ต้องเป็น list แต่ได้รับ {type(slots).__name__}"
         )
 
-    # --- จำนวน slots ต้องตรงกับ total_photos ---
-    if len(slots) != total_photos:
-        raise LayoutConfigError(
-            f"จำนวน slots ({len(slots)}) ไม่ตรงกับ total_photos ({total_photos})"
-        )
+    # --- จำนวน slots ต้องตรงกับ total_photos (Linked Slots: หลาย slot ใช้รูปเดียวกันได้) ---
+    # ไม่ check len(slots) != total_photos อีกต่อไป เพราะ slots อาจมีมากกว่า total_photos (linked)
 
     # --- จำนวนรูปถ่ายต้องตรงกับ total_photos ---
     if photo_count != total_photos:
@@ -302,15 +299,28 @@ def merge_photobooth(
     # พื้นหลังสีขาวทึบ เพื่อไม่ให้เห็นเป็นสีดำตรงส่วนที่ไม่มีรูป
     canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 255))
 
-    # ========== 4. วางรูปถ่ายลง Slot ==========
-    for i, (photo_path, slot) in enumerate(zip(photo_paths, slots)):
+    # ========== 4. วางรูปถ่ายลง Slot (Linked Slots รองรับ) ==========
+    for i, slot in enumerate(slots):
+        # อ่าน photo_index จาก slot data; backward compatible ถ้าไม่มีให้ใช้ i
+        photo_idx = slot.get("photo_index", i)
+        
+        # ตรวจสอบขอบเขต
+        if photo_idx >= len(photo_paths):
+            logger.warning(
+                "slot[%d] photo_index=%d เกินจำนวนรูปถ่าย (%d), ใช้ fallback index=%d",
+                i, photo_idx, len(photo_paths), i % len(photo_paths)
+            )
+            photo_idx = i % len(photo_paths)
+        
+        photo_path = photo_paths[photo_idx]
+        
         logger.info(
-            "กำลังวางรูป [%d/%d]: %s → slot(%d, %d, %dx%d)",
-            i + 1, len(photo_paths), photo_path,
+            "กำลังวางรูป [%d/%d]: %s (photo_index=%d) → slot(%d, %d, %dx%d)",
+            i + 1, len(slots), photo_path, photo_idx,
             slot["x"], slot["y"], slot["width"], slot["height"],
         )
 
-        photo = _load_image(photo_path, label=f"photo[{i}]")
+        photo = _load_image(photo_path, label=f"photo[{photo_idx}]")
         photo = photo.convert("RGBA")
 
         # Resize + Crop ให้พอดี slot

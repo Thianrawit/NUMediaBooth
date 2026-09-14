@@ -275,14 +275,14 @@ class SettingWidget(QWidget):
         general_layout.addLayout(export_row)
 
         # View Raw Images and Clear Cache
-        self.btn_view_raw = QPushButton("📸 ดูรูปดิบทั้งหมดในโฟลเดอร์ชั่วคราว")
+        self.btn_view_raw = QPushButton("ดูรูปดิบทั้งหมดในโฟลเดอร์ชั่วคราว")
         self.btn_view_raw.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_view_raw.setFixedHeight(40)
         self.btn_view_raw.setProperty("cssClass", "accent")
         self.btn_view_raw.clicked.connect(self._view_raw_images)
         general_layout.addWidget(self.btn_view_raw)
 
-        self.btn_clear_cache = QPushButton("🗑️ ล้างแคช (รูปชั่วคราวและ Logs)")
+        self.btn_clear_cache = QPushButton("ล้างแคช (รูปชั่วคราวและ Logs)")
         self.btn_clear_cache.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_clear_cache.setFixedHeight(40)
         self.btn_clear_cache.setProperty("cssClass", "danger")
@@ -404,7 +404,7 @@ class SettingWidget(QWidget):
         # Test Print Button
         test_print_row = QHBoxLayout()
         test_print_row.addStretch()
-        self.btn_test_print = QPushButton("🖨️ ทดสอบพิมพ์ (Test Print)")
+        self.btn_test_print = QPushButton("ทดสอบพิมพ์ (Test Print)")
         self.btn_test_print.setProperty("cssClass", "normal")
         self.btn_test_print.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_test_print.clicked.connect(self._test_print)
@@ -480,14 +480,14 @@ class SettingWidget(QWidget):
 
         template_btn_row = QHBoxLayout()
 
-        self.btn_add_template = QPushButton("➕  เพิ่ม Template ใหม่")
+        self.btn_add_template = QPushButton("เพิ่ม Template ใหม่")
         self.btn_add_template.setProperty("cssClass", "accent")
         self.btn_add_template.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_add_template.setFixedHeight(44)
         self.btn_add_template.clicked.connect(self._add_template)
         template_btn_row.addWidget(self.btn_add_template)
 
-        self.btn_open_template_dir = QPushButton("📂  เปิดโฟลเดอร์ Template")
+        self.btn_open_template_dir = QPushButton("เปิดโฟลเดอร์ Template")
         self.btn_open_template_dir.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_open_template_dir.setFixedHeight(44)
         self.btn_open_template_dir.clicked.connect(self._open_templates_dir)
@@ -518,12 +518,12 @@ class SettingWidget(QWidget):
         
         # เพิ่มปุ่ม แก้ไข/ลบ ใต้ลิสต์
         manage_btn_row = QHBoxLayout()
-        self.btn_edit_template = QPushButton("✏️ แก้ไข (Edit)")
+        self.btn_edit_template = QPushButton("แก้ไข (Edit)")
         self.btn_edit_template.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_edit_template.clicked.connect(self._edit_selected_template)
         manage_btn_row.addWidget(self.btn_edit_template)
         
-        self.btn_delete_template = QPushButton("🗑 ลบ (Delete)")
+        self.btn_delete_template = QPushButton("ลบ (Delete)")
         self.btn_delete_template.setProperty("cssClass", "danger")
         self.btn_delete_template.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_delete_template.clicked.connect(self._delete_selected_template)
@@ -640,12 +640,12 @@ class SettingWidget(QWidget):
         
         bottom_bar.addStretch()
 
-        self.btn_save = QPushButton("💾  บันทึกการตั้งค่า")
+        self.btn_save = QPushButton("บันทึก")
         self.btn_save.setProperty("cssClass", "primary")
         self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_save.setFixedSize(200, 48)
+        self.btn_save.setFixedSize(100, 48)
         save_font = QFont()
-        save_font.setPointSize(14)
+        save_font.setPointSize(20)
         save_font.setBold(True)
         self.btn_save.setFont(save_font)
         self.btn_save.clicked.connect(self._on_save_clicked)

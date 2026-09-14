@@ -19,7 +19,8 @@ from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QPainter, QFont, QTransfo
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsObject, QMessageBox, QListWidget, QWidget,
-    QGroupBox, QSlider, QGraphicsPixmapItem, QToolButton, QGraphicsRectItem, QListWidgetItem
+    QGroupBox, QSlider, QGraphicsPixmapItem, QToolButton, QGraphicsRectItem, QListWidgetItem,
+    QMenu
 )
 from chroma_key_module import remove_color_background, apply_multi_layer_chroma
 
@@ -30,6 +31,21 @@ logger = logging.getLogger(__name__)
 TOOL_NONE = 'none'
 TOOL_PICKER = 'picker'
 TOOL_ZONE = 'zone'
+
+# ─────────────────── Color Palette for Linked Slots ───────────────────
+# สีสำหรับแต่ละ photo_index group (ใช้วนซ้ำถ้าเกิน)
+SLOT_GROUP_COLORS = [
+    QColor(0, 230, 118),    # เขียว
+    QColor(255, 107, 107),  # แดง
+    QColor(100, 181, 246),  # ฟ้า
+    QColor(255, 213, 79),   # เหลือง
+    QColor(186, 104, 200),  # ม่วง
+    QColor(255, 138, 101),  # ส้ม
+    QColor(77, 208, 225),   # เทอร์ควอยซ์
+    QColor(240, 98, 146),   # ชมพู
+    QColor(129, 199, 132),  # เขียวอ่อน
+    QColor(149, 117, 205),  # ม่วงอ่อน
+]
 
 
 class TemplatePixmapItem(QGraphicsPixmapItem):
@@ -90,8 +106,11 @@ class ResizableRectItem(QGraphicsObject):
     """กล่องสี่เหลี่ยมที่คลิกเลือก, ลาก (Move), ยืดหดขอบ (Resize) และหมุน (Rotate) ได้"""
     # Signal แจ้งเตือนเมื่อมีการเปลี่ยนตำแหน่ง/ขนาด/หมุนเสร็จ
     geometry_changed = pyqtSignal()
+    # Signal แจ้งเมื่อต้องการ Link/Unlink (ส่ง item กับ target_photo_index)
+    link_requested = pyqtSignal(object, int)   # (self, target_photo_index)
+    unlink_requested = pyqtSignal(object)       # (self,)
 
-    def __init__(self, rect: QRectF, slot_index: int, parent=None) -> None:
+    def __init__(self, rect: QRectF, slot_index: int, photo_index: int = -1, parent=None) -> None:
         super().__init__(parent)
         self.setFlags(
             QGraphicsObject.GraphicsItemFlag.ItemIsSelectable |
@@ -99,6 +118,7 @@ class ResizableRectItem(QGraphicsObject):
             QGraphicsObject.GraphicsItemFlag.ItemSendsGeometryChanges
         )
         self.slot_index = slot_index
+        self.photo_index: int = photo_index if photo_index >= 0 else slot_index - 1
         self.handle_size = 12
         self.rotation_handle_size = 14
         
@@ -124,6 +144,13 @@ class ResizableRectItem(QGraphicsObject):
         }
         self.current_handle = None
         self.setAcceptHoverEvents(True)
+        
+        # เก็บ reference ไปยัง dialog เพื่อสร้าง context menu
+        self._dialog = None
+
+    def get_group_color(self) -> QColor:
+        """คืนสีตาม photo_index group"""
+        return SLOT_GROUP_COLORS[self.photo_index % len(SLOT_GROUP_COLORS)]
 
     @property
     def rect(self) -> QRectF:
@@ -140,14 +167,19 @@ class ResizableRectItem(QGraphicsObject):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         """วาดกล่องสี่เหลี่ยม Handle และแกนหมุน"""
-        # สีกล่อง: เขียว (ถ้าถูกเลือก) หรือ เหลือง
-        color = QColor(0, 230, 118) if self.isSelected() else QColor(255, 235, 59)
+        # สีกล่อง: ใช้สี group ตาม photo_index
+        group_color = self.get_group_color()
+        if self.isSelected():
+            # ถ้าถูกเลือก → สว่างขึ้น
+            color = group_color.lighter(130)
+        else:
+            color = group_color
         
         painter.setPen(QPen(color, 4, Qt.PenStyle.DashLine))
         painter.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 50)))
         painter.drawRect(self.rect)
         
-        # วาดข้อความ (Slot # และ องศา)
+        # วาดข้อความ (Slot # + 📸 photo_index + องศา)
         painter.setPen(QPen(color))
         font = QFont()
         font.setPointSize(20)
@@ -155,9 +187,16 @@ class ResizableRectItem(QGraphicsObject):
         painter.setFont(font)
         
         angle = self.rotation()
-        text = f"Slot {self.slot_index}"
+        text = f"Slot {self.slot_index}\nช็อต {self.photo_index + 1}"
         if int(angle) != 0:
             text += f"\n{int(angle)}°"
+        
+        # แสดงไอคอน 🔗 ถ้ามี slot อื่นที่มี photo_index เดียวกัน
+        if self._dialog:
+            linked_count = sum(1 for s in self._dialog.slots if s.photo_index == self.photo_index)
+            if linked_count > 1:
+                text += f"\n🔗 x{linked_count}"
+        
         painter.drawText(self.rect, Qt.AlignmentFlag.AlignCenter, text)
 
         # วาดมุมจับ (Handles) และแกนหมุน ถ้าถูกเลือก
@@ -218,6 +257,95 @@ class ResizableRectItem(QGraphicsObject):
                     self.current_handle = h
                     break
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        """แสดง Context Menu สำหรับ Slot (คัดลอก, ทำซ้ำ, ลบ, Link/Unlink)"""
+        if not self._dialog:
+            return
+        
+        # เลือก slot นี้ทันทีเมื่อคลิกขวา
+        if self.scene():
+            self.scene().clearSelection()
+        self.setSelected(True)
+        if self in self._dialog.slots:
+            idx = self._dialog.slots.index(self)
+            self._dialog.list_slots.setCurrentRow(idx)
+        
+        menu = QMenu()
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #242438;
+                color: white;
+                border: 1px solid #404060;
+                border-radius: 6px;
+                padding: 4px;
+                font-size: 13px;
+            }
+            QMenu::item {
+                padding: 6px 20px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #00CEC9;
+                color: black;
+            }
+            QMenu::item:disabled {
+                color: #606080;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #404060;
+                margin: 4px 8px;
+            }
+        """)
+        
+        # ─── Copy / Duplicate / Delete ───
+        copy_action = menu.addAction("คัดลอก (Ctrl+C)")
+        copy_action.triggered.connect(self._dialog.copy_selected_slot)
+
+        dup_action = menu.addAction("ทำซ้ำ (Ctrl+D)")
+        dup_action.triggered.connect(self._dialog.duplicate_selected_slot)
+
+        del_action = menu.addAction("ลบ")
+        del_action.triggered.connect(self._dialog._delete_slot)
+
+        menu.addSeparator()
+
+        # ─── Submenu: เชื่อมกับ Slot อื่น ───
+        link_menu = menu.addMenu("เชื่อมกับ Slot อื่น...")
+        link_menu.setStyleSheet(menu.styleSheet())
+        
+        has_other_slots = False
+        for other_slot in self._dialog.slots:
+            if other_slot is self:
+                continue
+            has_other_slots = True
+            linked_text = " (linked)" if other_slot.photo_index == self.photo_index else ""
+            action = link_menu.addAction(
+                f"📷 Slot {other_slot.slot_index} [ช็อต {other_slot.photo_index + 1}]{linked_text}"
+            )
+            target_pi = other_slot.photo_index
+            action.triggered.connect(lambda checked, pi=target_pi: self.link_requested.emit(self, pi))
+        
+        if not has_other_slots:
+            link_menu.setEnabled(False)
+
+        # ─── Unlink ───
+        # ตรวจว่า Slot นี้ linked กับใครอยู่ไหม
+        linked_slots = [s for s in self._dialog.slots if s.photo_index == self.photo_index and s is not self]
+        if linked_slots:
+            linked_names = ", ".join(f"Slot {s.slot_index}" for s in linked_slots)
+            unlink_action = menu.addAction(f"ตัดการเชื่อม (Unlink จาก {linked_names})")
+            unlink_action.triggered.connect(lambda: self.unlink_requested.emit(self))
+        
+        menu.addSeparator()
+        
+        # ─── Info ───
+        info_text = f"ช็อต {self.photo_index + 1} (Photo Index: {self.photo_index})"
+        info_action = menu.addAction(info_text)
+        info_action.setEnabled(False)
+        
+        menu.exec(event.screenPos())
 
     def mouseMoveEvent(self, event) -> None:
         """ปรับขนาดกล่องตามเมาส์ที่ลาก หรือหมุนตามจุดหมุน"""
@@ -291,16 +419,105 @@ class ResizableRectItem(QGraphicsObject):
 
 
 class TemplateGraphicsView(QGraphicsView):
-    """Custom View สำหรับ Zoom และ Panning"""
+    """Custom View สำหรับ Zoom, Panning และ Context Menu ของ Canvas"""
     zoom_changed = pyqtSignal(int)
 
-    def __init__(self, scene, parent=None):
+    def __init__(self, scene, dialog=None, parent=None):
         super().__init__(scene, parent)
+        self.dialog = dialog
+        self._clipboard_slot_data = None
         self.setRenderHint(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.SmoothPixmapTransform)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.AnchorUnderMouse)
         self.current_zoom = 1.0
         self._pan_start = None
+
+    @property
+    def clipboard_slot_data(self):
+        if self.dialog:
+            return getattr(self.dialog, "clipboard_slot_data", None)
+        return self._clipboard_slot_data
+
+    @clipboard_slot_data.setter
+    def clipboard_slot_data(self, val):
+        if self.dialog:
+            self.dialog.clipboard_slot_data = val
+        self._clipboard_slot_data = val
+
+    def contextMenuEvent(self, event):
+        """แสดง Context Menu เมื่อคลิกขวาบนพื้นที่ว่างของ Scene/Canvas"""
+        # ตรวจสอบว่าคลิกบน ResizableRectItem หรือไม่ ถ้าใช่ให้ส่งต่อให้ item นั้น
+        scene_pos = self.mapToScene(event.pos())
+        items = self.scene().items(scene_pos)
+        for it in items:
+            curr = it
+            while curr:
+                if isinstance(curr, ResizableRectItem):
+                    super().contextMenuEvent(event)
+                    return
+                curr = curr.parentItem()
+
+        if not self.dialog:
+            super().contextMenuEvent(event)
+            return
+
+        menu = QMenu(self)
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #242438;
+                color: white;
+                border: 1px solid #404060;
+                border-radius: 6px;
+                padding: 4px;
+                font-size: 13px;
+            }
+            QMenu::item {
+                padding: 6px 20px;
+                border-radius: 4px;
+            }
+            QMenu::item:selected {
+                background-color: #00CEC9;
+                color: black;
+            }
+            QMenu::item:disabled {
+                color: #606080;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #404060;
+                margin: 4px 8px;
+            }
+        """)
+
+        paste_action = menu.addAction("วาง (Ctrl+V)")
+        has_clipboard = getattr(self.dialog, "clipboard_slot_data", None) is not None
+        paste_action.setEnabled(has_clipboard)
+        paste_action.triggered.connect(lambda: self.dialog.paste_slot(target_pos=scene_pos))
+
+        menu.exec(event.globalPos())
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        modifiers = event.modifiers()
+        if self.dialog:
+            if modifiers == Qt.KeyboardModifier.ControlModifier:
+                if key == Qt.Key.Key_C:
+                    self.dialog.copy_selected_slot()
+                    event.accept()
+                    return
+                elif key == Qt.Key.Key_V:
+                    self.dialog.paste_slot()
+                    event.accept()
+                    return
+                elif key == Qt.Key.Key_D:
+                    self.dialog.duplicate_selected_slot()
+                    event.accept()
+                    return
+            elif key == Qt.Key.Key_Delete:
+                self.dialog._delete_slot()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def wheelEvent(self, event):
         if event.modifiers() == Qt.KeyboardModifier.ControlModifier:
@@ -367,6 +584,7 @@ class TemplateEditorDialog(QDialog):
         self.dest_dir = dest_dir
         self.slots: list[ResizableRectItem] = []
         self.slot_counter = 0
+        self.clipboard_slot_data: dict | None = None  # In-Memory Clipboard สำหรับ Copy/Paste Slot
         
         self.target_rgb = None
         self.original_image = None
@@ -465,7 +683,7 @@ class TemplateEditorDialog(QDialog):
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(0, 0, 0, 0)
         
-        title = QLabel("🖼 เครื่องมือจัด Layout")
+        title = QLabel("เครื่องมือจัด Layout")
         font_title = QFont()
         font_title.setPointSize(18)
         font_title.setBold(True)
@@ -479,13 +697,13 @@ class TemplateEditorDialog(QDialog):
 
         # ปุ่มเพิ่ม/ลบ
         btn_layout = QHBoxLayout()
-        self.btn_add = QPushButton("➕ เพิ่ม Slot")
+        self.btn_add = QPushButton("เพิ่ม Slot")
         self.btn_add.setProperty("cssClass", "normal")
         self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_add.clicked.connect(self._add_slot)
         btn_layout.addWidget(self.btn_add)
 
-        self.btn_del = QPushButton("🗑 ลบ Slot")
+        self.btn_del = QPushButton("ลบ Slot")
         self.btn_del.setProperty("cssClass", "danger")
         self.btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_del.clicked.connect(self._delete_slot)
@@ -498,7 +716,7 @@ class TemplateEditorDialog(QDialog):
         left_layout.addWidget(self.list_slots)
         
         # ---------- Chroma Key Panel ----------
-        grp_chroma = QGroupBox("🧪 ลบพื้นหลังสี (Chroma Key)")
+        grp_chroma = QGroupBox("ลบพื้นหลังสี (Chroma Key)")
         grp_chroma.setStyleSheet("QGroupBox { color: white; font-weight: bold; } QLabel { color: #A0A0C0; }")
         chroma_layout = QVBoxLayout(grp_chroma)
         
@@ -531,7 +749,7 @@ class TemplateEditorDialog(QDialog):
         # ปุ่ม Draw Zone
         self.btn_tool_zone = QToolButton()
         self.btn_tool_zone.setCheckable(True)
-        self.btn_tool_zone.setText("📐 วาดโซน")
+        self.btn_tool_zone.setText("วาดโซน")
         self.btn_tool_zone.setToolTip("วาดพื้นที่ลบสี (Draw Zone)")
         self.btn_tool_zone.setFixedHeight(44)
         self.btn_tool_zone.clicked.connect(self._on_tool_zone_clicked)
@@ -539,7 +757,7 @@ class TemplateEditorDialog(QDialog):
         
         # ปุ่ม Reset
         self.btn_chroma_reset = QToolButton()
-        self.btn_chroma_reset.setText("🔄 Reset")
+        self.btn_chroma_reset.setText("ล้างค่า")
         self.btn_chroma_reset.setToolTip("ล้างการตั้งค่าลบสีทั้งหมด")
         self.btn_chroma_reset.setFixedHeight(44)
         self.btn_chroma_reset.setStyleSheet("""
@@ -596,7 +814,7 @@ class TemplateEditorDialog(QDialog):
         
         # ── Chroma Layer List ──
         layer_header = QHBoxLayout()
-        lbl_layers = QLabel("🎨 Layer สีที่ลบ:")
+        lbl_layers = QLabel("Layer สีที่ลบ:")
         lbl_layers.setStyleSheet("color: #B0B0D0; font-weight: bold;")
         
         self.btn_del_layer = QPushButton("❌")
@@ -623,7 +841,7 @@ class TemplateEditorDialog(QDialog):
         
         # Zoom Controls
         zoom_layout = QHBoxLayout()
-        zoom_label = QLabel("🔍 ซูม:")
+        zoom_label = QLabel("ซูม:")
         self.lbl_zoom = QLabel("100%")
         self.lbl_zoom.setStyleSheet("color: white; font-weight: bold; font-size: 16px;")
         
@@ -694,13 +912,13 @@ class TemplateEditorDialog(QDialog):
         left_layout.addLayout(undo_redo_layout)
         left_layout.addSpacing(10)
 
-        self.btn_save = QPushButton("💾 บันทึก Template")
+        self.btn_save = QPushButton("บันทึก Template")
         self.btn_save.setProperty("cssClass", "primary")
         self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_save.clicked.connect(self._save_template)
         left_layout.addWidget(self.btn_save)
 
-        self.btn_cancel = QPushButton("✖ ยกเลิก")
+        self.btn_cancel = QPushButton("ยกเลิก")
         self.btn_cancel.setProperty("cssClass", "danger")
         self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_cancel.clicked.connect(self.reject)
@@ -712,7 +930,7 @@ class TemplateEditorDialog(QDialog):
         self.scene = QGraphicsScene()
         self.scene.selectionChanged.connect(self._on_scene_selection_changed)
         
-        self.view = TemplateGraphicsView(self.scene)
+        self.view = TemplateGraphicsView(self.scene, dialog=self)
         self.view.zoom_changed.connect(lambda p: self.lbl_zoom.setText(f"{p}%"))
         
         # Shortcuts for Zoom
@@ -725,6 +943,12 @@ class TemplateEditorDialog(QDialog):
         # Shortcuts for Undo/Redo
         QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._undo)
         QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(self._redo)
+        # Shortcuts for Slot Copy/Paste/Duplicate/Delete
+        QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self._on_shortcut_copy)
+        QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(self._on_shortcut_paste)
+        QShortcut(QKeySequence("Ctrl+D"), self).activated.connect(self._on_shortcut_duplicate)
+        QShortcut(QKeySequence("Delete"), self).activated.connect(self._on_shortcut_delete)
+        QShortcut(QKeySequence("Backspace"), self).activated.connect(self._on_shortcut_delete)
         
         # Checkerboard background
         checker_size = 15
@@ -815,24 +1039,30 @@ class TemplateEditorDialog(QDialog):
                     config = json.load(f)
                 
                 # โหลด Slots
-                for slot in config.get("slots", []):
+                for i, slot in enumerate(config.get("slots", [])):
                     self.slot_counter += 1
                     x = slot.get("x", 0)
                     y = slot.get("y", 0)
                     w = slot.get("width", 400)
                     h = slot.get("height", 300)
                     angle = slot.get("angle", 0)
+                    # backward compatible: ถ้าไม่มี photo_index ให้ใช้ลำดับ i
+                    pi = slot.get("photo_index", i)
                     
                     # x, y ที่เก็บไว้คือมุมบนซ้าย (ตอนยังไม่หมุน)
                     # สร้าง rect ด้วยพิกัดนี้ แล้ว ResizableRectItem จะนำ rect.center() ไปใช้เป็น pos()
                     rect = QRectF(x, y, w, h)
-                    item = ResizableRectItem(rect, self.slot_counter)
+                    item = ResizableRectItem(rect, self.slot_counter, photo_index=pi)
+                    item._dialog = self
                     item.setRotation(angle)
                     item.geometry_changed.connect(self._on_slot_geometry_changed)
+                    item.link_requested.connect(self._on_link_requested)
+                    item.unlink_requested.connect(self._on_unlink_requested)
                     
                     self.scene.addItem(item)
                     self.slots.append(item)
-                    self.list_slots.addItem(f"📷 Slot {self.slot_counter}")
+                
+                self._refresh_slot_list()
                 
                 # โหลด Chroma Layers (ถ้ามี — backward compatible)
                 for layer_data in config.get("chroma_layers", []):
@@ -882,8 +1112,193 @@ class TemplateEditorDialog(QDialog):
         self.scene.addItem(self.bg_item)
 
     # ═══════════════════════════════════════════════════
-    #  Slot Management (เหมือนเดิม)
+    #  Slot Management + Linked Slots
     # ═══════════════════════════════════════════════════
+
+    # ─── Keyboard Shortcut Guards ───
+    def _is_text_input_focused(self) -> bool:
+        """ตรวจสอบว่าขณะนี้ผู้ใช้กำลังโฟกัสอยู่ที่ช่องพิมพ์ข้อความหรือไม่"""
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        focus_w = self.focusWidget()
+        return isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit))
+
+    def _on_shortcut_copy(self) -> None:
+        focus_w = self.focusWidget()
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        if isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            focus_w.copy()
+            return
+        self.copy_selected_slot()
+
+    def _on_shortcut_paste(self) -> None:
+        focus_w = self.focusWidget()
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        if isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            focus_w.paste()
+            return
+        self.paste_slot()
+
+    def _on_shortcut_duplicate(self) -> None:
+        if not self._is_text_input_focused():
+            self.duplicate_selected_slot()
+
+    def _on_shortcut_delete(self) -> None:
+        if not self._is_text_input_focused():
+            self._delete_slot()
+
+    def keyPressEvent(self, event) -> None:
+        """ดักจับคีย์ลัดในระดับ Dialog โดยไม่ขัดขวางการพิมพ์ในช่องข้อความ"""
+        focus_w = self.focusWidget()
+        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
+        if isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit)):
+            super().keyPressEvent(event)
+            return
+
+        key = event.key()
+        modifiers = event.modifiers()
+        if modifiers == Qt.KeyboardModifier.ControlModifier:
+            if key == Qt.Key.Key_C:
+                self.copy_selected_slot()
+                event.accept()
+                return
+            elif key == Qt.Key.Key_V:
+                self.paste_slot()
+                event.accept()
+                return
+            elif key == Qt.Key.Key_D:
+                self.duplicate_selected_slot()
+                event.accept()
+                return
+        elif key == Qt.Key.Key_Delete:
+            self._delete_slot()
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
+    # ─── Copy / Paste / Duplicate Logic ───
+    def copy_selected_slot(self) -> None:
+        """คัดลอกข้อมูล Slot ที่กำลังเลือกอยู่ (Active Slot) ลง In-Memory Clipboard"""
+        selected_slot = None
+        selected_items = self.scene.selectedItems()
+        for item in selected_items:
+            if isinstance(item, ResizableRectItem) and item in self.slots:
+                selected_slot = item
+                break
+                
+        if not selected_slot:
+            row = self.list_slots.currentRow()
+            if 0 <= row < len(self.slots):
+                selected_slot = self.slots[row]
+                
+        if not selected_slot:
+            return
+            
+        # ใช้ copy.deepcopy() ดึงเฉพาะคุณสมบัติ ไม่คัดลอก Pointer หรือ QGraphicsItem โดยตรง
+        self.clipboard_slot_data = copy.deepcopy({
+            "w": selected_slot.w,
+            "h": selected_slot.h,
+            "width": selected_slot.w,
+            "height": selected_slot.h,
+            "angle": selected_slot.rotation(),
+            "rotation": selected_slot.rotation(),
+            "photo_index": selected_slot.photo_index,
+            "scale_mode": getattr(selected_slot, "scale_mode", "fit"),
+            "cx": selected_slot.pos().x(),
+            "cy": selected_slot.pos().y(),
+        })
+        logger.info("คัดลอก Slot %s ลง Clipboard เรียบร้อย: %s", selected_slot.slot_index, self.clipboard_slot_data)
+
+    def paste_slot(self, target_pos: QPointF | None = None) -> None:
+        """วาง Slot จาก Clipboard ลงบน Scene พร้อมคำนวณพิกัดใหม่และอัปเดต Undo Stack"""
+        if not self.clipboard_slot_data:
+            return
+            
+        w = self.clipboard_slot_data.get("width", self.clipboard_slot_data.get("w", 400))
+        h = self.clipboard_slot_data.get("height", self.clipboard_slot_data.get("h", 300))
+        angle = self.clipboard_slot_data.get("rotation", self.clipboard_slot_data.get("angle", 0))
+        scale_mode = self.clipboard_slot_data.get("scale_mode", "fit")
+        
+        # คำนวณขอบเขต Canvas ของ Template
+        canvas_w = self.pixmap.width() if (hasattr(self, "pixmap") and self.pixmap) else 1200
+        canvas_h = self.pixmap.height() if (hasattr(self, "pixmap") and self.pixmap) else 800
+        
+        half_w = w / 2
+        half_h = h / 2
+        
+        if target_pos is not None:
+            cx = target_pos.x()
+            cy = target_pos.y()
+        else:
+            # ขยับเยื้องจากตำแหน่ง Slot ต้นฉบับ (+25 px, +25 px) หรือจุดศูนย์กลาง viewport
+            if "cx" in self.clipboard_slot_data and "cy" in self.clipboard_slot_data:
+                cx = self.clipboard_slot_data["cx"] + 25
+                cy = self.clipboard_slot_data["cy"] + 25
+            else:
+                viewport_center = self.view.mapToScene(self.view.viewport().rect().center())
+                cx = viewport_center.x() + 25
+                cy = viewport_center.y() + 25
+            
+            # อัปเดตพิกัดใน Clipboard เพื่อให้การกด Paste ซ้ำ ขยับเยื้องต่อเนื่อง (+25, +25)
+            self.clipboard_slot_data["cx"] = cx
+            self.clipboard_slot_data["cy"] = cy
+
+        # ตรวจสอบไม่ให้พิกัดหลุดออกนอกขอบเขต Canvas ของ Template
+        if cx + half_w > canvas_w or cy + half_h > canvas_h or cx - half_w < 0 or cy - half_h < 0:
+            # ถ้าล้นขอบ ให้วนกลับมาเริ่มที่มุมบนซ้าย (+25, +25)
+            if cx + half_w > canvas_w or cx - half_w < 0:
+                cx = half_w + 25
+            if cy + half_h > canvas_h or cy - half_h < 0:
+                cy = half_h + 25
+            self.clipboard_slot_data["cx"] = cx
+            self.clipboard_slot_data["cy"] = cy
+
+        # Clamp ค่าให้อยู่ภายใน Canvas อย่างแน่นอน
+        cx = max(half_w, min(cx, canvas_w - half_w))
+        cy = max(half_h, min(cy, canvas_h - half_h))
+
+        # หาหมายเลข slot_index ใหม่ต่อท้ายลำดับสูงสุด
+        max_slot_index = max((s.slot_index for s in self.slots), default=0)
+        self.slot_counter = max(self.slot_counter + 1, max_slot_index + 1)
+        
+        # photo_index ใหม่ = ช็อตใหม่ที่เป็นอิสระตามค่าเริ่มต้น (ต่อจากค่าสูงสุดที่มี)
+        new_photo_index = max((s.photo_index for s in self.slots), default=-1) + 1
+        
+        # สร้าง ResizableRectItem ชิ้นใหม่ขึ้นมาบน Scene
+        rect = QRectF(cx - half_w, cy - half_h, w, h)
+        item = ResizableRectItem(rect, self.slot_counter, photo_index=new_photo_index)
+        item._dialog = self
+        item.setRotation(angle)
+        item.scale_mode = scale_mode
+            
+        item.geometry_changed.connect(self._on_slot_geometry_changed)
+        item.link_requested.connect(self._on_link_requested)
+        item.unlink_requested.connect(self._on_unlink_requested)
+        
+        self.scene.addItem(item)
+        self.slots.append(item)
+        
+        # จัดเรียง photo_index ให้เป็นลำดับมาตรฐาน
+        self.normalize_photo_indices()
+        
+        # ไฮไลต์และ Focus ไปที่ Slot ที่เพิ่งวางใหม่ทันที
+        self.scene.clearSelection()
+        item.setSelected(True)
+        self.view.ensureVisible(item)
+        self._refresh_slot_list()
+        self.list_slots.setCurrentRow(len(self.slots) - 1)
+        
+        # บันทึกการเปลี่ยนแปลงลงใน Undo/Redo Stack
+        self.push_undo()
+
+    def duplicate_selected_slot(self) -> None:
+        """ทำซ้ำ Slot ที่กำลังถูกเลือก (Copy + Paste ในขั้นตอนเดียว)"""
+        self.copy_selected_slot()
+        self.paste_slot()
+
+    def push_undo(self) -> None:
+        """บันทึก state ปัจจุบันลง Undo/Redo stack"""
+        self._save_state()
 
     def _add_slot(self) -> None:
         """เพิ่มกล่อง (Slot) ใหม่ลงบนจอ"""
@@ -893,33 +1308,111 @@ class TemplateEditorDialog(QDialog):
         rect = QRectF(cx, cy, 400, 300)
         
         self.slot_counter += 1
-        item = ResizableRectItem(rect, self.slot_counter)
+        # photo_index ใหม่ = max ที่มี + 1 (ไม่ซ้ำกับที่มีอยู่)
+        new_photo_index = max((s.photo_index for s in self.slots), default=-1) + 1
+        item = ResizableRectItem(rect, self.slot_counter, photo_index=new_photo_index)
+        item._dialog = self
         item.geometry_changed.connect(self._on_slot_geometry_changed)
+        item.link_requested.connect(self._on_link_requested)
+        item.unlink_requested.connect(self._on_unlink_requested)
         
         self.scene.addItem(item)
         self.slots.append(item)
-        self.list_slots.addItem(f"📷 Slot {self.slot_counter}")
         
         # เลือกกล่องให้ทันที
         self.scene.clearSelection()
         item.setSelected(True)
         
+        self._refresh_slot_list()
         self._save_state()
         
     def _delete_slot(self) -> None:
         """ลบกล่อง (Slot) ที่ถูกเลือกอยู่"""
+        target_item = None
         selected_items = self.scene.selectedItems()
-        if not selected_items:
+        for item in selected_items:
+            if isinstance(item, ResizableRectItem) and item in self.slots:
+                target_item = item
+                break
+                
+        if not target_item:
+            row = self.list_slots.currentRow()
+            if 0 <= row < len(self.slots):
+                target_item = self.slots[row]
+                
+        if not target_item:
             QMessageBox.warning(self, "แจ้งเตือน", "กรุณาคลิกเลือก Slot ที่ต้องการลบก่อน")
             return
             
-        item = selected_items[0]
-        if item in self.slots:
-            idx = self.slots.index(item)
-            self.scene.removeItem(item)
-            self.slots.pop(idx)
-            self.list_slots.takeItem(idx)
-            self._save_state()
+        idx = self.slots.index(target_item)
+        self.scene.removeItem(target_item)
+        self.slots.pop(idx)
+        self.normalize_photo_indices()
+        self._refresh_slot_list()
+        self._save_state()
+
+    def normalize_photo_indices(self) -> None:
+        """จัดเรียง photo_index ให้เป็นลำดับต่อเนื่อง 0, 1, 2, ...
+        
+        Slot ที่มี photo_index เดียวกันจะยังคงเดียวกัน (linked)
+        แต่ตัวเลขจะถูก remap ให้ไม่กระโดด
+        """
+        if not self.slots:
+            return
+        
+        # รวบรวม unique photo_index ตามลำดับที่ปรากฏ
+        seen = {}
+        next_idx = 0
+        for slot in self.slots:
+            if slot.photo_index not in seen:
+                seen[slot.photo_index] = next_idx
+                next_idx += 1
+        
+        # Remap
+        for slot in self.slots:
+            old_pi = slot.photo_index
+            slot.photo_index = seen[old_pi]
+            slot.update()  # repaint
+
+    def _refresh_slot_list(self) -> None:
+        """อัปเดต QListWidget ให้แสดง photo_index + linked icon"""
+        self.list_slots.clear()
+        # นับจำนวน slot ต่อ photo_index เพื่อดูว่า linked กัน
+        pi_counts = {}
+        for s in self.slots:
+            pi_counts[s.photo_index] = pi_counts.get(s.photo_index, 0) + 1
+        
+        for item in self.slots:
+            linked = pi_counts.get(item.photo_index, 1) > 1
+            icon = "🔗" if linked else "📷"
+            text = f"{icon} Slot {item.slot_index} [ช็อต {item.photo_index + 1}]"
+            list_item = QListWidgetItem(text)
+            if linked:
+                group_color = item.get_group_color()
+                list_item.setForeground(group_color)
+            self.list_slots.addItem(list_item)
+
+    def _on_link_requested(self, source_item: ResizableRectItem, target_photo_index: int) -> None:
+        """เมื่อ Slot ร้องขอ Link กับ photo_index อื่น"""
+        source_item.photo_index = target_photo_index
+        self.normalize_photo_indices()
+        self._refresh_slot_list()
+        # repaint all slots เพื่ออัปเดตสีและ linked count
+        for s in self.slots:
+            s.update()
+        self._save_state()
+
+    def _on_unlink_requested(self, source_item: ResizableRectItem) -> None:
+        """เมื่อ Slot ร้องขอ Unlink ออกจาก group"""
+        # กำหนด photo_index ใหม่ที่ไม่ซ้ำกับใคร
+        max_pi = max((s.photo_index for s in self.slots), default=-1)
+        source_item.photo_index = max_pi + 1
+        self.normalize_photo_indices()
+        self._refresh_slot_list()
+        # repaint all slots
+        for s in self.slots:
+            s.update()
+        self._save_state()
 
     def _on_scene_selection_changed(self) -> None:
         """เมื่อคลิกเลือกของใน scene ให้ไฮไลต์รายการใน list ด้วย"""
@@ -1197,18 +1690,20 @@ class TemplateEditorDialog(QDialog):
     # ═══════════════════════════════════════════════════
 
     def _capture_snapshot(self) -> dict:
-        """จับ snapshot ของสถานะปัจจุบัน (slots + chroma layers)"""
+        """จับ snapshot ของสถานะปัจจุบัน (slots + chroma layers + photo_index)"""
         slots_data = []
         for item in self.slots:
             cx = item.pos().x()
             cy = item.pos().y()
             slots_data.append({
                 "slot_index": item.slot_index,
+                "photo_index": item.photo_index,
                 "cx": cx,
                 "cy": cy,
                 "w": item.w,
                 "h": item.h,
-                "angle": item.rotation()
+                "angle": item.rotation(),
+                "scale_mode": getattr(item, "scale_mode", "fit")
             })
         
         layers_data = []
@@ -1280,12 +1775,18 @@ class TemplateEditorDialog(QDialog):
                     s["w"],
                     s["h"]
                 )
-                item = ResizableRectItem(rect, s["slot_index"])
+                pi = s.get("photo_index", s["slot_index"] - 1)
+                item = ResizableRectItem(rect, s["slot_index"], photo_index=pi)
+                item._dialog = self
                 item.setRotation(s["angle"])
+                item.scale_mode = s.get("scale_mode", "fit")
                 item.geometry_changed.connect(self._on_slot_geometry_changed)
+                item.link_requested.connect(self._on_link_requested)
+                item.unlink_requested.connect(self._on_unlink_requested)
                 self.scene.addItem(item)
                 self.slots.append(item)
-                self.list_slots.addItem(f"📷 Slot {s['slot_index']}")
+            
+            self._refresh_slot_list()
             
             # --- คืนค่า Chroma Layers ---
             # ลบ ROI graphics items เก่า
@@ -1425,7 +1926,8 @@ class TemplateEditorDialog(QDialog):
                     "y": y, 
                     "width": w, 
                     "height": h,
-                    "angle": round(angle, 2)
+                    "angle": round(angle, 2),
+                    "photo_index": item.photo_index
                 })
 
             # 3. เก็บ Chroma Layers
@@ -1438,9 +1940,12 @@ class TemplateEditorDialog(QDialog):
                     "edge_crop": layer["edge_crop"]
                 })
 
-            # 4. เซฟเป็นไฟล์ .json
+            # 4. คำนวณ total_photos = จำนวน unique photo_index
+            unique_photos = len(set(item.photo_index for item in self.slots))
+            
+            # 5. เซฟเป็นไฟล์ .json
             config = {
-                "total_photos": len(self.slots),
+                "total_photos": unique_photos,
                 "slots": slots_data
             }
             # เพิ่ม chroma_layers เฉพาะเมื่อมีข้อมูล
@@ -1450,7 +1955,8 @@ class TemplateEditorDialog(QDialog):
             with open(dest_json_path, "w", encoding="utf-8") as f:
                 json.dump(config, f, indent=4)
 
-            QMessageBox.information(self, "สำเร็จ", f"บันทึก Template สำเร็จ!\nเพิ่ม {len(self.slots)} ช่องเรียบร้อยแล้ว")
+            unique_text = f" ({unique_photos} ช็อตจริง)" if unique_photos < len(self.slots) else ""
+            QMessageBox.information(self, "สำเร็จ", f"บันทึก Template สำเร็จ!\nเพิ่ม {len(self.slots)} ช่อง{unique_text}เรียบร้อยแล้ว")
             self.accept()
             
         except Exception as e:

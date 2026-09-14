@@ -1,0 +1,65 @@
+{
+    "total_photos": 3,
+    "slots": [
+        {
+            "x": 181,
+            "y": 382,
+            "width": 373,
+            "height": 283,
+            "angle": 0.0,
+            "photo_index": 0
+        },
+        {
+            "x": 183,
+            "y": 668,
+            "width": 373,
+            "height": 283,
+            "angle": 0.0,
+            "photo_index": 1
+        },
+        {
+            "x": 184,
+            "y": 951,
+            "width": 373,
+            "height": 283,
+            "angle": 0.0,
+            "photo_index": 2
+        },
+        {
+            "x": 647,
+            "y": 549,
+            "width": 373,
+            "height": 283,
+            "angle": 0.0,
+            "photo_index": 0
+        },
+        {
+            "x": 647,
+            "y": 836,
+            "width": 373,
+            "height": 283,
+            "angle": 0.0,
+            "photo_index": 1
+        },
+        {
+            "x": 647,
+            "y": 1123,
+            "width": 373,
+            "height": 283,
+            "angle": 0.0,
+            "photo_index": 2
+        }
+    ],
+    "chroma_layers": [
+        {
+            "color": [
+                0,
+                191,
+                99
+            ],
+            "rect": null,
+            "tolerance": 30,
+            "edge_crop": 1
+        }
+    ]
+}

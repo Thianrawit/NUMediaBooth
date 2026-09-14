@@ -62,6 +62,11 @@ class CameraCaptureWidget(QWidget):
         self.camera_name = ""
         self._temp_last_photo = None
         
+        # Linked Slots state
+        self._unique_photo_indices: list[int] = []  # ลำดับ unique photo_index
+        self._photo_index_to_slots: dict[int, list[int]] = {}  # photo_index → [slot_indices (0-based)]
+        self._current_shot_idx = 0  # index ใน _unique_photo_indices (0-based)
+        
         # โฟลเดอร์พักไฟล์ (ย้ายจาก Pictures ของ User มาไว้ในตัวโปรแกรม)
         self.temp_dir = get_dynamic_path(".NUMediaBooth_Temp")
         os.makedirs(self.temp_dir, exist_ok=True)
@@ -170,24 +175,24 @@ class CameraCaptureWidget(QWidget):
         bottom_layout = QHBoxLayout(self.bottom_bar)
         bottom_layout.setContentsMargins(0, 0, 0, 0)
         
-        self.btn_start_capture = QPushButton("📸 เริ่มถ่ายรูป")
+        self.btn_start_capture = QPushButton("เริ่มถ่ายรูป")
         self.btn_start_capture.setProperty("cssClass", "primary")
         self.btn_start_capture.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_start_capture.setFixedSize(250, 60)
         font_btn = QFont()
-        font_btn.setPointSize(14)
+        font_btn.setPointSize(20)
         font_btn.setBold(True)
         self.btn_start_capture.setFont(font_btn)
         self.btn_start_capture.clicked.connect(self.start_countdown)
         
-        self.btn_retake = QPushButton("🔄 ถ่ายใหม่ (Retake)")
+        self.btn_retake = QPushButton("ถ่ายใหม่ (Retake)")
         self.btn_retake.setProperty("cssClass", "danger")
         self.btn_retake.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_retake.setFixedSize(200, 60)
         self.btn_retake.setFont(font_btn)
         self.btn_retake.clicked.connect(self._on_retake)
 
-        self.btn_next = QPushButton("✅ ถัดไป (Next)")
+        self.btn_next = QPushButton("ถัดไป (Next)")
         self.btn_next.setProperty("cssClass", "primary")
         self.btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_next.setFixedSize(200, 60)
@@ -217,7 +222,7 @@ class CameraCaptureWidget(QWidget):
         """เตรียมความพร้อมก่อนเริ่มถ่าย
         
         Args:
-            total_photos: จำนวนรูปที่ต้องถ่ายทั้งหมด
+            total_photos: จำนวนรูปที่ต้องถ่ายทั้งหมด (unique photo_index count)
             countdown_seconds: เวลานับถอยหลังต่อรูป (วินาที)
             camera_name: ชื่อกล้องที่เลือกจากหน้าตั้งค่า (ถ้าว่างจะใช้ตัวแรกที่เจอ)
             template_path: พาธไฟล์รูป Template
@@ -229,12 +234,33 @@ class CameraCaptureWidget(QWidget):
         self.template_path = template_path
         self.layout_config = layout_config or {}
         
-        self.current_photo_idx = 1
+        # สร้าง mapping photo_index → slot_indices
+        self._build_photo_index_map()
+        
+        self._current_shot_idx = 0
+        self.current_photo_idx = 1  # สำหรับแสดงผล UI (1-based)
         self.taken_photos = []
 
         self._setup_camera()
         self._setup_graphics_scene()
         self._show_ready_state()
+
+    def _build_photo_index_map(self) -> None:
+        """สร้าง mapping จาก photo_index → รายการ slot indices (0-based)"""
+        self._photo_index_to_slots = {}
+        slots = self.layout_config.get("slots", [])
+        
+        for i, slot in enumerate(slots):
+            pi = slot.get("photo_index", i)
+            if pi not in self._photo_index_to_slots:
+                self._photo_index_to_slots[pi] = []
+            self._photo_index_to_slots[pi].append(i)
+        
+        # เรียงลำดับ unique photo_index ตามที่ปรากฏ
+        self._unique_photo_indices = sorted(self._photo_index_to_slots.keys())
+        
+        logger.info("สร้าง photo_index map: %s (จำนวนช็อตจริง=%d, จำนวน slot ทั้งหมด=%d)",
+                    self._photo_index_to_slots, len(self._unique_photo_indices), len(slots))
 
     def _setup_camera(self) -> None:
         """เชื่อมต่อกับ Webcam ด้วย QCamera"""
@@ -293,7 +319,7 @@ class CameraCaptureWidget(QWidget):
         else:
             self.template_item.setPixmap(QPixmap())
             
-        # 2. วาด Placeholder ลงทุกช่อง
+        # 2. วาด Placeholder ลงทุกช่อง พร้อมแสดง photo_index
         slots = self.layout_config.get("slots", [])
         for i, slot in enumerate(slots):
             idx = i + 1
@@ -302,6 +328,7 @@ class CameraCaptureWidget(QWidget):
             x = slot.get("x", 0)
             y = slot.get("y", 0)
             angle = slot.get("angle", 0)
+            pi = slot.get("photo_index", i)
             
             # วงกลมพื้นดำโปร่งใส พร้อมตัวเลขสีขาวตรงกลาง
             placeholder = QGraphicsRectItem(0, 0, w, h)
@@ -312,7 +339,9 @@ class CameraCaptureWidget(QWidget):
             placeholder.setPen(QPen(Qt.PenStyle.NoPen))
             placeholder.setZValue(2)
             
-            text_item = QGraphicsTextItem(str(idx), placeholder)
+            # แสดง photo_index แทนตัวเลข slot
+            display_text = f"📸 {pi}"
+            text_item = QGraphicsTextItem(display_text, placeholder)
             font = QFont()
             font.setPointSize(60)
             font.setBold(True)
@@ -328,23 +357,32 @@ class CameraCaptureWidget(QWidget):
         self._update_scene_for_current_slot()
 
     def _update_scene_for_current_slot(self) -> None:
-        """ย้ายกล้องไป Slot ปัจจุบัน ซ่อน Placeholder อันนั้น และจัดตำแหน่ง Countdown"""
+        """ย้ายกล้องไป Slot แรกของกลุ่ม photo_index ปัจจุบัน ซ่อน Placeholder ทั้งกลุ่ม และจัดตำแหน่ง Countdown"""
         slots = self.layout_config.get("slots", [])
-        if not slots or self.current_photo_idx > len(slots):
+        
+        if not slots or self._current_shot_idx >= len(self._unique_photo_indices):
             self.video_container.hide()
             return
             
         self.video_container.show()
         
-        # ปิด Placeholder ของช่องปัจจุบัน และช่องก่อนหน้า
+        # หา slot indices ที่ตรงกับ photo_index ปัจจุบัน
+        current_pi = self._unique_photo_indices[self._current_shot_idx]
+        current_slot_indices = self._photo_index_to_slots.get(current_pi, [])
+        
+        # ซ่อน/แสดง Placeholder
+        # ซ่อน placeholder ของ slot ที่ถ่ายแล้ว + slot ที่กำลังจะถ่าย
+        already_shot_pis = set(self._unique_photo_indices[:self._current_shot_idx])
         for idx, item in self.placeholder_items.items():
-            if idx <= self.current_photo_idx:
+            slot_pi = slots[idx - 1].get("photo_index", idx - 1)
+            if slot_pi in already_shot_pis or slot_pi == current_pi:
                 item.hide()
             else:
                 item.show()
                 
-        # ดึงค่าพิกัด Slot ปัจจุบัน
-        slot = slots[self.current_photo_idx - 1]
+        # ดึงค่าพิกัด Slot แรกของกลุ่มนี้ (วางกล้องตรง slot แรก)
+        first_slot_idx = current_slot_indices[0]
+        slot = slots[first_slot_idx]
         w = slot.get("width", 400)
         h = slot.get("height", 300)
         x = slot.get("x", 0)
@@ -379,7 +417,16 @@ class CameraCaptureWidget(QWidget):
             
         self.timer.stop()
         self.content_stack.setCurrentIndex(0)
-        self.lbl_status.setText(f"📸 รูปที่ {self.current_photo_idx} / {self.total_photos}")
+        
+        # แสดงจำนวนช็อตจริงและจำนวนช่องทั้งหมด
+        total_slots = len(self.layout_config.get("slots", []))
+        shot_num = self._current_shot_idx + 1
+        total_shots = len(self._unique_photo_indices)
+        if total_shots < total_slots:
+            self.lbl_status.setText(f"📸 ช็อตที่ {shot_num} / {total_shots} ({total_slots} ช่อง)")
+        else:
+            self.lbl_status.setText(f"📸 รูปที่ {shot_num} / {total_shots}")
+        
         self.countdown_item.hide()
         
         self._update_scene_for_current_slot()
@@ -400,15 +447,21 @@ class CameraCaptureWidget(QWidget):
         self.countdown_item.setPlainText(str(self.current_countdown))
         
         # จัดตำแหน่งกึ่งกลางใหม่ตามขนาด Text ที่เปลี่ยนไป
+        # ใช้ slot แรกของกลุ่ม photo_index ปัจจุบัน
         slots = self.layout_config.get("slots", [])
-        if slots:
-            slot = slots[self.current_photo_idx - 1]
-            w = slot.get("width", 400)
-            h = slot.get("height", 300)
-            x = slot.get("x", 0)
-            y = slot.get("y", 0)
-            br = self.countdown_item.boundingRect()
-            self.countdown_item.setPos(x + w/2 - br.width()/2, y + h/2 - br.height()/2)
+        if self._current_shot_idx < len(self._unique_photo_indices):
+            current_pi = self._unique_photo_indices[self._current_shot_idx]
+            current_slot_indices = self._photo_index_to_slots.get(current_pi, [])
+            if current_slot_indices:
+                first_slot_idx = current_slot_indices[0]
+                if first_slot_idx < len(slots):
+                    slot = slots[first_slot_idx]
+                    w = slot.get("width", 400)
+                    h = slot.get("height", 300)
+                    x = slot.get("x", 0)
+                    y = slot.get("y", 0)
+                    br = self.countdown_item.boundingRect()
+                    self.countdown_item.setPos(x + w/2 - br.width()/2, y + h/2 - br.height()/2)
             
         self.countdown_item.show()
         
@@ -441,7 +494,7 @@ class CameraCaptureWidget(QWidget):
         self.image_capture.captureToFile(filepath)
 
     def _on_image_saved(self, request_id: int, fileName: str) -> None:
-        """ทำงานเมื่อกล้องบันทึกรูปเสร็จสมบูรณ์"""
+        """ทำงานเมื่อกล้องบันทึกรูปเสร็จสมบูรณ์ — วางรูปลงทุก linked slot"""
         logger.info("Webcam ถ่ายภาพสำเร็จ: %s", fileName)
         self._temp_last_photo = fileName
         
@@ -451,32 +504,36 @@ class CameraCaptureWidget(QWidget):
             
         self.video_container.hide()
         
-        # วาดรูปที่เพิ่งถ่ายลงใน Slot นั้นชั่วคราวให้ดู
-        idx = self.current_photo_idx
+        # วาดรูปที่เพิ่งถ่ายลงทุก Slot ที่มี photo_index เดียวกัน
         slots = self.layout_config.get("slots", [])
-        if slots and idx <= len(slots):
-            slot = slots[idx - 1]
-            w = slot.get("width", 400)
-            h = slot.get("height", 300)
-            x = slot.get("x", 0)
-            y = slot.get("y", 0)
-            angle = slot.get("angle", 0)
+        if self._current_shot_idx < len(self._unique_photo_indices):
+            current_pi = self._unique_photo_indices[self._current_shot_idx]
+            target_slot_indices = self._photo_index_to_slots.get(current_pi, [])
             
-            pixmap = QPixmap(fileName)
-            # Resize and crop
-            scaled = pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-            cw, ch = scaled.width(), scaled.height()
-            crop_rect = QRectF((cw - w) / 2, (ch - h) / 2, w, h).toRect()
-            cropped = scaled.copy(crop_rect)
-            
-            item = QGraphicsPixmapItem(cropped)
-            item.setPos(x, y)
-            item.setTransformOriginPoint(w/2, h/2)
-            item.setRotation(angle)
-            item.setZValue(0)
-            
-            self.graphics_scene.addItem(item)
-            self.taken_photo_items[idx] = item
+            for slot_idx in target_slot_indices:
+                slot = slots[slot_idx]
+                w = slot.get("width", 400)
+                h = slot.get("height", 300)
+                x = slot.get("x", 0)
+                y = slot.get("y", 0)
+                angle = slot.get("angle", 0)
+                
+                pixmap = QPixmap(fileName)
+                # Resize and crop
+                scaled = pixmap.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+                cw, ch = scaled.width(), scaled.height()
+                crop_rect = QRectF((cw - w) / 2, (ch - h) / 2, w, h).toRect()
+                cropped = scaled.copy(crop_rect)
+                
+                item = QGraphicsPixmapItem(cropped)
+                item.setPos(x, y)
+                item.setTransformOriginPoint(w/2, h/2)
+                item.setRotation(angle)
+                item.setZValue(0)
+                
+                self.graphics_scene.addItem(item)
+                # เก็บไว้ทุก slot (ใช้ 1-based key)
+                self.taken_photo_items[slot_idx + 1] = item
 
         self.btn_retake.setVisible(True)
         self.btn_next.setVisible(True)
@@ -493,27 +550,33 @@ class CameraCaptureWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _on_retake(self) -> None:
-        """ทิ้งรูปเดิม แล้วกลับไปเปิดกล้องถ่ายใหม่"""
+        """ทิ้งรูปเดิม แล้วกลับไปเปิดกล้องถ่ายใหม่ — ลบรูปจากทุก linked slot"""
         self._temp_last_photo = None
         
-        # ลบรูปที่เพิ่งวาดใส่ออกไป
-        idx = self.current_photo_idx
-        if idx in self.taken_photo_items:
-            self.graphics_scene.removeItem(self.taken_photo_items[idx])
-            del self.taken_photo_items[idx]
+        # ลบรูปที่เพิ่งวาดใส่ออกไป — ทุก slot ที่มี photo_index เดียวกัน
+        if self._current_shot_idx < len(self._unique_photo_indices):
+            current_pi = self._unique_photo_indices[self._current_shot_idx]
+            target_slot_indices = self._photo_index_to_slots.get(current_pi, [])
+            for slot_idx in target_slot_indices:
+                key = slot_idx + 1  # 1-based key
+                if key in self.taken_photo_items:
+                    self.graphics_scene.removeItem(self.taken_photo_items[key])
+                    del self.taken_photo_items[key]
             
         self._show_ready_state()
 
     def _on_next(self) -> None:
-        """เก็บรูปนี้ไว้ และไปลุยรูปถัดไป"""
+        """เก็บรูปนี้ไว้ และไปลุยช็อตถัดไป (ตาม unique photo_index)"""
         if self._temp_last_photo:
             self.taken_photos.append(self._temp_last_photo)
             
         # ไม่ต้องวาดรูปลง Scene แล้ว เพราะวาดไปตั้งแต่ตอน _on_image_saved แล้วรูปนั้นก็คาอยู่แบบนั้นเลย!
         
-        if self.current_photo_idx < self.total_photos:
-            # รูปยังไม่ครบ ถ่ายต่อ
-            self.current_photo_idx += 1
+        self._current_shot_idx += 1
+        
+        if self._current_shot_idx < len(self._unique_photo_indices):
+            # ช็อตยังไม่ครบ ถ่ายต่อ
+            self.current_photo_idx = self._current_shot_idx + 1
             self._show_ready_state()
         else:
             # ถ่ายครบโควต้าเทมเพลตแล้ว

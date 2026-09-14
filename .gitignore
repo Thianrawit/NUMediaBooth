@@ -12,3 +12,5 @@ saveSetting/config.json
 crash_log.txt
 pass.txt
 .skills/
+.agentrules
+ReviewIDE.txt
