@@ -22,6 +22,7 @@ class ConfigManager:
         "printer_name": "",
         "camera_name": "",
         "admin_password": "1234",
+        "countdown_seconds": 3,
         "password_enabled": True,
         # Key Bindings (เก็บเป็น int ของ Qt.Key enum เพราะ JSON ไม่รองรับ Enum)
         "key_confirm": 16777220,  # Qt.Key.Key_Return (Enter)

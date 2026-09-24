@@ -323,9 +323,10 @@ class MainWindow(QMainWindow):
 
         # ตั้งค่าจำนวนรูปที่จะถ่าย
         camera_name = self.config_manager.get("camera_name", "")
+        countdown_sec = self.config_manager.get("countdown_seconds", 3)
         self.capture_widget.setup_capture(
             total_photos=total_photos, 
-            countdown_seconds=3,
+            countdown_seconds=countdown_sec,
             camera_name=camera_name,
             template_path=self._current_template_path,
             layout_config=self._current_layout_config

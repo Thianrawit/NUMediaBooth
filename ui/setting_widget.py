@@ -253,6 +253,20 @@ class SettingWidget(QWidget):
         fs_row.addStretch()
         general_layout.addLayout(fs_row)
         
+        # Countdown Timer (เวลานับถอยหลังก่อนถ่ายรูป)
+        countdown_row = QHBoxLayout()
+        countdown_label = QLabel("เวลานับถอยหลังก่อนถ่ายรูป:")
+        countdown_row.addWidget(countdown_label)
+        
+        self.spin_countdown = QSpinBox()
+        self.spin_countdown.setRange(1, 10)
+        self.spin_countdown.setValue(3)
+        self.spin_countdown.setSuffix(" วินาที")
+        self.spin_countdown.setFixedWidth(120)
+        countdown_row.addWidget(self.spin_countdown)
+        countdown_row.addStretch()
+        general_layout.addLayout(countdown_row)
+        
         # Export Path
         export_row = QHBoxLayout()
         export_label = QLabel("โฟลเดอร์เซฟรูป:")
@@ -945,6 +959,9 @@ class SettingWidget(QWidget):
             
         copies = self.config_manager.get("print_copies", 1)
         self.spin_copies.setValue(copies)
+        
+        countdown = self.config_manager.get("countdown_seconds", 3)
+        self.spin_countdown.setValue(countdown)
                 
         camera_name = self.config_manager.get("camera_name", "")
         if camera_name and camera_name != "— ไม่พบกล้อง Webcam —":
@@ -988,6 +1005,7 @@ class SettingWidget(QWidget):
             "paper_size": self.combo_paper_size.currentText(),
             "media_type": self.combo_media_type.currentText(),
             "print_copies": self.spin_copies.value(),
+            "countdown_seconds": self.spin_countdown.value(),
             "camera_name": camera_name,
             "password_enabled": self.chk_password_enabled.isChecked(),
             "admin_password": self.input_admin_password.text().strip() or "1234",
@@ -1031,6 +1049,9 @@ class SettingWidget(QWidget):
                 
         if "print_copies" in settings:
             self.spin_copies.setValue(settings["print_copies"])
+            
+        if "countdown_seconds" in settings:
+            self.spin_countdown.setValue(settings["countdown_seconds"])
                 
         if "camera_name" in settings:
             idx = self.combo_camera.findText(settings["camera_name"])
