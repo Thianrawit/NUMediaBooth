@@ -1,8 +1,8 @@
 import os
 import logging
 
-from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QIcon, QPixmap
+from PyQt6.QtCore import Qt, QSize, QUrl
+from PyQt6.QtGui import QIcon, QDesktopServices
 from PyQt6.QtWidgets import (
     QDialog,
     QVBoxLayout,
@@ -12,9 +12,9 @@ from PyQt6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QListView,
-    QWidget,
 )
 from path_manager import get_resource_path
+from ui.styles import BG_DARK, BG_CARD, BG_INPUT, BG_HOVER, BORDER, PRIMARY, TEXT_PRIMARY
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class RawImagesDialog(QDialog):
         self.temp_dir = temp_dir
         self.setWindowTitle("รูปดิบทั้งหมด")
         self.resize(800, 600)
-        self.setStyleSheet("background-color: #1E1E2E; color: white;")
+        self.setStyleSheet(f"background-color: {BG_DARK}; color: {TEXT_PRIMARY}; font-family: 'Google Sans', sans-serif;")
         
         self._init_ui()
         self._load_images()
@@ -64,22 +64,22 @@ class RawImagesDialog(QDialog):
         self.list_widget.setResizeMode(QListView.ResizeMode.Adjust)
         self.list_widget.setSpacing(16)
         self.list_widget.setIconSize(QSize(160, 120))
-        self.list_widget.setStyleSheet("""
-            QListWidget {
-                background-color: #242438;
-                border: 1px solid #353550;
+        self.list_widget.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {BG_CARD};
+                border: 1px solid {BORDER};
                 border-radius: 8px;
-            }
-            QListWidget::item {
-                background: #353550;
+            }}
+            QListWidget::item {{
+                background: {BG_INPUT};
                 border-radius: 8px;
                 padding: 10px;
-                color: #FFFFFF;
-            }
-            QListWidget::item:selected {
-                background: #4A4A6A;
-                border: 2px solid #00E676;
-            }
+                color: {TEXT_PRIMARY};
+            }}
+            QListWidget::item:selected {{
+                background: {BG_HOVER};
+                border: 2px solid {PRIMARY};
+            }}
         """)
         layout.addWidget(self.list_widget, stretch=1)
         
@@ -89,16 +89,18 @@ class RawImagesDialog(QDialog):
         
         self.btn_close = QPushButton("ปิดหน้าต่าง")
         self.btn_close.setFixedSize(120, 40)
-        self.btn_close.setStyleSheet("""
-            QPushButton {
-                background-color: #353550;
-                color: white;
+        self.btn_close.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
                 border-radius: 8px;
                 font-size: 14px;
-            }
-            QPushButton:hover {
-                background-color: #4A4A6A;
-            }
+            }}
+            QPushButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
         """)
         self.btn_close.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_close.clicked.connect(self.accept)
@@ -126,4 +128,7 @@ class RawImagesDialog(QDialog):
 
     def _open_folder(self):
         if os.path.exists(self.temp_dir):
-            os.startfile(self.temp_dir)
+            if hasattr(os, "startfile"):
+                os.startfile(self.temp_dir)
+            else:
+                QDesktopServices.openUrl(QUrl.fromLocalFile(self.temp_dir))

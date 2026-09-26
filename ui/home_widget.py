@@ -40,7 +40,7 @@ class HomeWidget(QWidget):
     settings_clicked = pyqtSignal()
     logo_clicked = pyqtSignal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, parent: QWidget | None = None, config_manager: ConfigManager | None = None) -> None:
         super().__init__(parent)
         self.setObjectName("HomeWidget")
         self.admin_password = "1234"
@@ -53,8 +53,8 @@ class HomeWidget(QWidget):
         self._setting_timer.setSingleShot(True)
         self._setting_timer.timeout.connect(self._reset_setting_clicks)
         
-        # โหลดคีย์ลัดจาก Config
-        self.config_manager = ConfigManager()
+        # โหลดคีย์ลัดจาก Config (แชร์ instance จาก MainWindow เพื่อ sync ค่าเสมอ)
+        self.config_manager = config_manager if config_manager is not None else ConfigManager()
         
         # โทนสี: ส้ม เทา ขาว ดำ
         # เน้นความเรียบง่าย พื้นขาวสะอาดตา
@@ -164,6 +164,10 @@ class HomeWidget(QWidget):
     # ------------------------------------------------------------------
     # Keyboard Navigation (Arcade Mode)
     # ------------------------------------------------------------------
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self.config_manager.load()
 
     def keyPressEvent(self, event):
         """รับคีย์ลัดสำหรับโหมด Arcade"""

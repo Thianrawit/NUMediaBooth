@@ -27,7 +27,7 @@ def remove_color_background(image: Image.Image, target_rgb: tuple[int, int, int]
     img_array = np.array(image)
     
     # ดึงเฉพาะช่องสี R, G, B (ไม่เอา Alpha มาคำนวณระยะห่างสี)
-    r, g, b, a = img_array[:,:,0], img_array[:,:,1], img_array[:,:,2], img_array[:,:,3]
+    r, g, b = img_array[:,:,0], img_array[:,:,1], img_array[:,:,2]
     
     tr, tg, tb = target_rgb
     

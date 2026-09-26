@@ -11,7 +11,7 @@ import os
 import time
 import logging
 
-from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QSize, QRectF, QSizeF
+from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QRectF, QSizeF
 from PyQt6.QtGui import QPixmap, QFont, QColor, QPen, QBrush, QPainter
 from PyQt6.QtWidgets import (
     QWidget,
@@ -21,7 +21,6 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QMessageBox,
     QStackedWidget,
-    QStackedLayout,
     QGraphicsView,
     QGraphicsScene,
     QGraphicsPixmapItem,
@@ -29,10 +28,8 @@ from PyQt6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsItem
 )
-from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QImageCapture
+from PyQt6.QtMultimedia import QMediaDevices, QCamera, QMediaCaptureSession, QImageCapture, QVideoFrame
 from PyQt6.QtMultimediaWidgets import QGraphicsVideoItem
-from config_manager import ConfigManager
-from chroma_key_module import remove_color_background
 from path_manager import get_dynamic_path
 
 logger = logging.getLogger(__name__)
@@ -75,6 +72,7 @@ class CameraCaptureWidget(QWidget):
         self.camera = None
         self.capture_session = None
         self.image_capture = None
+        self._waiting_for_first_frame = False
 
         # Timer สำหรับนับถอยหลัง
         self.timer = QTimer(self)
@@ -146,7 +144,7 @@ class CameraCaptureWidget(QWidget):
         font_countdown.setPointSize(120)
         font_countdown.setBold(True)
         self.countdown_item.setFont(font_countdown)
-        self.countdown_item.setDefaultTextColor(QColor(0, 206, 201))
+        self.countdown_item.setDefaultTextColor(QColor(255, 107, 43))
         self.countdown_item.setZValue(3)
         self.graphics_scene.addItem(self.countdown_item)
         self.countdown_item.hide()
@@ -241,6 +239,13 @@ class CameraCaptureWidget(QWidget):
         self.current_photo_idx = 1  # สำหรับแสดงผล UI (1-based)
         self.taken_photos = []
 
+        # ล้าง Buffer เฟรมเก่าที่อาจค้างอยู่ใน videoSink จากรอบก่อนหน้า
+        if hasattr(self, 'video_item') and self.video_item:
+            sink = self.video_item.videoSink()
+            if sink:
+                sink.setVideoFrame(QVideoFrame())
+        self._waiting_for_first_frame = True
+
         self._setup_camera()
         self._setup_graphics_scene()
         self._show_ready_state()
@@ -294,6 +299,15 @@ class CameraCaptureWidget(QWidget):
             
             self.image_capture.imageSaved.connect(self._on_image_saved)
             self.image_capture.errorOccurred.connect(self._on_image_error)
+
+            # เชื่อมต่อ videoSink เพื่อตรวจจับเฟรมสดแรก (Cold Start)
+            sink = self.video_item.videoSink()
+            if sink:
+                try:
+                    sink.videoFrameChanged.disconnect(self._on_video_frame_changed)
+                except Exception:
+                    pass
+                sink.videoFrameChanged.connect(self._on_video_frame_changed)
             
         else:
             logger.error("ไม่พบกล้อง Webcam ใดๆ")
@@ -364,7 +378,12 @@ class CameraCaptureWidget(QWidget):
             self.video_container.hide()
             return
             
-        self.video_container.show()
+        if not self._waiting_for_first_frame:
+            self.video_container.show()
+        else:
+            self.video_container.hide()
+            # Safety timeout เผื่อสัญญาณ videoFrameChanged ดีเลย์
+            QTimer.singleShot(1500, self._ensure_video_container_shown)
         
         # หา slot indices ที่ตรงกับ photo_index ปัจจุบัน
         current_pi = self._unique_photo_indices[self._current_shot_idx]
@@ -406,13 +425,25 @@ class CameraCaptureWidget(QWidget):
         self.countdown_item.setPos(cx, cy)
 
 
+    def _on_video_frame_changed(self, frame: QVideoFrame) -> None:
+        """ตรวจจับเฟรมสดแรกจากกล้อง เมื่อได้เฟรมสดแล้วจึงแสดง video_container เพื่อไม่ให้เห็นภาพเก่าค้าง"""
+        if self._waiting_for_first_frame and frame.isValid():
+            self._waiting_for_first_frame = False
+            self.video_container.show()
+
+    def _ensure_video_container_shown(self) -> None:
+        """Timeout สำรอง เผื่อสัญญาณ videoFrameChanged ไม่ถูกเรียก"""
+        if self._waiting_for_first_frame:
+            self._waiting_for_first_frame = False
+            self.video_container.show()
+
     # ------------------------------------------------------------------
     # Capture Logic
     # ------------------------------------------------------------------
 
     def _show_ready_state(self) -> None:
         """แสดงหน้าจอเตรียมพร้อม + โชว์วิดีโอสด"""
-        if self.camera:
+        if self.camera and not self.camera.isActive():
             self.camera.start()
             
         self.timer.stop()
@@ -498,10 +529,8 @@ class CameraCaptureWidget(QWidget):
         logger.info("Webcam ถ่ายภาพสำเร็จ: %s", fileName)
         self._temp_last_photo = fileName
         
-        # ปิดกล้องชั่วคราวเพื่อประหยัดทรัพยากร
-        if self.camera:
-            self.camera.stop()
-            
+        # ซ่อนเฉพาะ video_container เพื่อแสดงรูปพรีวิวที่เพิ่งถ่าย
+        # (ไม่ต้องสั่ง camera.stop() เพื่อให้กล้องสตรีมต่อ ไม่เกิด Lag/Warmup ในช็อตถัดไป)
         self.video_container.hide()
         
         # วาดรูปที่เพิ่งถ่ายลงทุก Slot ที่มี photo_index เดียวกัน

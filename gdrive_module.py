@@ -1,5 +1,4 @@
 import os
-import time
 import base64
 import requests
 import logging
@@ -31,7 +30,7 @@ class GoogleDriveUploadThread(QThread):
                 return
                 
             if not GAS_WEBAPP_URL.startswith("http"):
-                self.upload_failed.emit(f"URL ไม่ถูกต้อง กรุณาตั้งค่า GAS_WEBAPP_URL ใน gdrive_module.py")
+                self.upload_failed.emit("URL ไม่ถูกต้อง กรุณาตั้งค่า GAS_WEBAPP_URL ใน gdrive_module.py")
                 return
                 
             logger.info("เริ่มอัปโหลดไฟล์ %s ไปยัง Google Drive ผ่าน Web App", self.file_path)

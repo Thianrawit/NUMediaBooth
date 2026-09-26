@@ -14,15 +14,47 @@ import logging
 import math
 
 from PIL import Image, ImageQt
-from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal
-from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QPainter, QFont, QTransform, QShortcut, QKeySequence, QIcon
+from PyQt6.QtCore import Qt, QRectF, QPointF, pyqtSignal, QSize
+from PyQt6 import sip
+from PyQt6.QtGui import QPixmap, QPen, QColor, QBrush, QPainter, QFont, QShortcut, QKeySequence, QIcon
 from PyQt6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
     QGraphicsView, QGraphicsScene, QGraphicsObject, QMessageBox, QListWidget, QWidget,
     QGroupBox, QSlider, QGraphicsPixmapItem, QToolButton, QGraphicsRectItem, QListWidgetItem,
-    QMenu
+    QMenu, QStyledItemDelegate, QStyle
 )
-from chroma_key_module import remove_color_background, apply_multi_layer_chroma
+from chroma_key_module import apply_multi_layer_chroma
+from ui.styles import (
+    PRIMARY, PRIMARY_HOVER, PRIMARY_PRESSED,
+    BG_DARK, BG_CARD, BG_INPUT, BG_HOVER,
+    TEXT_PRIMARY, TEXT_SECONDARY, TEXT_MUTED,
+    BORDER, DANGER
+)
+
+def _make_tinted_icon(icon_path: str, color: QColor = QColor("white")) -> QIcon:
+    """แปลงไอคอนทึบแสงสีดำเป็นสีที่ต้องการ (ค่าเริ่มต้นสีขาว)"""
+    pixmap = QPixmap(icon_path)
+    if pixmap.isNull():
+        return QIcon()
+    painter = QPainter(pixmap)
+    painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceIn)
+    painter.fillRect(pixmap.rect(), color)
+    painter.end()
+    return QIcon(pixmap)
+
+def _make_cross_icon(size: int = 14, color: QColor = QColor("white")) -> QIcon:
+    """สร้างไอคอนกากบาทสีขาวคมชัด ป้องกันปัญหา Windows Emoji แสดงผลเป็นสีแดงกลืนกับปุ่ม"""
+    pixmap = QPixmap(size, size)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(color, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    pad = 2
+    painter.drawLine(pad, pad, size - pad, size - pad)
+    painter.drawLine(size - pad, pad, pad, size - pad)
+    painter.end()
+    return QIcon(pixmap)
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +78,43 @@ SLOT_GROUP_COLORS = [
     QColor(129, 199, 132),  # เขียวอ่อน
     QColor(149, 117, 205),  # ม่วงอ่อน
 ]
+
+
+class SlotListDelegate(QStyledItemDelegate):
+    """Delegate สำหรับวาดข้อความใน list_slots ให้ใช้สีตาม ForegroundRole เสมอ (ไม่โดน QSS ทับ)"""
+    def sizeHint(self, option, index) -> QSize:
+        size = super().sizeHint(option, index)
+        return QSize(size.width(), max(size.height(), 36))
+
+    def paint(self, painter: QPainter, option, index) -> None:
+        opt = option
+        self.initStyleOption(opt, index)
+        # ล้าง text ออก เพื่อให้ QStyle วาดเฉพาะพื้นหลัง/กรอบ/สถานะ hover และ selected
+        opt.text = ""
+        widget = opt.widget
+        style = widget.style() if widget else None
+        if style:
+            style.drawControl(QStyle.ControlElement.CE_ItemViewItem, opt, painter, widget)
+            
+        # วาดข้อความด้วยตัวเองโดยดึงสีจาก ForegroundRole
+        text = index.data(Qt.ItemDataRole.DisplayRole)
+        if text:
+            painter.save()
+            fg = index.data(Qt.ItemDataRole.ForegroundRole)
+            if fg and hasattr(fg, 'color'):
+                painter.setPen(fg.color())
+            elif isinstance(fg, QColor):
+                painter.setPen(fg)
+            else:
+                painter.setPen(QColor(TEXT_PRIMARY))
+                
+            font = index.data(Qt.ItemDataRole.FontRole)
+            if font and isinstance(font, QFont):
+                painter.setFont(font)
+                
+            rect = option.rect.adjusted(10, 0, -10, 0)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, str(text))
+            painter.restore()
 
 
 class TemplatePixmapItem(QGraphicsPixmapItem):
@@ -175,8 +244,33 @@ class ResizableRectItem(QGraphicsObject):
         else:
             color = group_color
         
+        # ── Dummy Preview Mode: วาดรูป dummy.jpg ลงใน Slot (crop-to-fill) ──
+        show_dummy = False
+        if self._dialog and getattr(self._dialog, '_preview_dummy', False):
+            dummy_pm = getattr(self._dialog, '_dummy_pixmap', None)
+            if dummy_pm and not dummy_pm.isNull():
+                show_dummy = True
+                r = self.rect
+                slot_w, slot_h = r.width(), r.height()
+                img_w, img_h = dummy_pm.width(), dummy_pm.height()
+                
+                # คำนวณ crop-to-fill (cover mode)
+                scale = max(slot_w / img_w, slot_h / img_h)
+                src_w = slot_w / scale
+                src_h = slot_h / scale
+                src_x = (img_w - src_w) / 2
+                src_y = (img_h - src_h) / 2
+                src_rect = QRectF(src_x, src_y, src_w, src_h)
+                
+                painter.setClipRect(r)
+                painter.drawPixmap(r, dummy_pm, src_rect)
+                painter.setClipping(False)
+        
         painter.setPen(QPen(color, 4, Qt.PenStyle.DashLine))
-        painter.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 50)))
+        if not show_dummy:
+            painter.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 50)))
+        else:
+            painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.drawRect(self.rect)
         
         # วาดข้อความ (Slot # + 📸 photo_index + องศา)
@@ -196,6 +290,15 @@ class ResizableRectItem(QGraphicsObject):
             linked_count = sum(1 for s in self._dialog.slots if s.photo_index == self.photo_index)
             if linked_count > 1:
                 text += f"\n🔗 x{linked_count}"
+        
+        # วาดข้อความพร้อม drop shadow เพื่อให้อ่านได้ชัดบน dummy image
+        if show_dummy:
+            painter.setPen(QPen(QColor(0, 0, 0, 180)))
+            shadow_offset = 2
+            shadow_rect = QRectF(self.rect.x() + shadow_offset, self.rect.y() + shadow_offset,
+                                 self.rect.width(), self.rect.height())
+            painter.drawText(shadow_rect, Qt.AlignmentFlag.AlignCenter, text)
+            painter.setPen(QPen(color))
         
         painter.drawText(self.rect, Qt.AlignmentFlag.AlignCenter, text)
 
@@ -272,31 +375,31 @@ class ResizableRectItem(QGraphicsObject):
             self._dialog.list_slots.setCurrentRow(idx)
         
         menu = QMenu()
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #242438;
-                color: white;
-                border: 1px solid #404060;
-                border-radius: 6px;
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {BG_CARD};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                border-radius: 8px;
                 padding: 4px;
                 font-size: 13px;
-            }
-            QMenu::item {
+            }}
+            QMenu::item {{
                 padding: 6px 20px;
                 border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #00CEC9;
-                color: black;
-            }
-            QMenu::item:disabled {
-                color: #606080;
-            }
-            QMenu::separator {
+            }}
+            QMenu::item:selected {{
+                background-color: {PRIMARY};
+                color: {TEXT_PRIMARY};
+            }}
+            QMenu::item:disabled {{
+                color: {TEXT_MUTED};
+            }}
+            QMenu::separator {{
                 height: 1px;
-                background: #404060;
+                background: {BORDER};
                 margin: 4px 8px;
-            }
+            }}
         """)
         
         # ─── Copy / Duplicate / Delete ───
@@ -462,31 +565,31 @@ class TemplateGraphicsView(QGraphicsView):
             return
 
         menu = QMenu(self)
-        menu.setStyleSheet("""
-            QMenu {
-                background-color: #242438;
-                color: white;
-                border: 1px solid #404060;
-                border-radius: 6px;
+        menu.setStyleSheet(f"""
+            QMenu {{
+                background-color: {BG_CARD};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                border-radius: 8px;
                 padding: 4px;
                 font-size: 13px;
-            }
-            QMenu::item {
+            }}
+            QMenu::item {{
                 padding: 6px 20px;
                 border-radius: 4px;
-            }
-            QMenu::item:selected {
-                background-color: #00CEC9;
-                color: black;
-            }
-            QMenu::item:disabled {
-                color: #606080;
-            }
-            QMenu::separator {
+            }}
+            QMenu::item:selected {{
+                background-color: {PRIMARY};
+                color: {TEXT_PRIMARY};
+            }}
+            QMenu::item:disabled {{
+                color: {TEXT_MUTED};
+            }}
+            QMenu::separator {{
                 height: 1px;
-                background: #404060;
+                background: {BORDER};
                 margin: 4px 8px;
-            }
+            }}
         """)
 
         paste_action = menu.addAction("วาง (Ctrl+V)")
@@ -497,26 +600,8 @@ class TemplateGraphicsView(QGraphicsView):
         menu.exec(event.globalPos())
 
     def keyPressEvent(self, event):
-        key = event.key()
-        modifiers = event.modifiers()
-        if self.dialog:
-            if modifiers == Qt.KeyboardModifier.ControlModifier:
-                if key == Qt.Key.Key_C:
-                    self.dialog.copy_selected_slot()
-                    event.accept()
-                    return
-                elif key == Qt.Key.Key_V:
-                    self.dialog.paste_slot()
-                    event.accept()
-                    return
-                elif key == Qt.Key.Key_D:
-                    self.dialog.duplicate_selected_slot()
-                    event.accept()
-                    return
-            elif key == Qt.Key.Key_Delete:
-                self.dialog._delete_slot()
-                event.accept()
-                return
+        # ให้ Dialog และ QShortcut ระดับหน้าต่างเป็นผู้จัดการคีย์ลัด Ctrl+C, Ctrl+V, Ctrl+D, Delete
+        # เพื่อป้องกันการเรียกฟังก์ชันซ้ำซ้อน (Double Execution) และให้เคารพการ Focus ในช่องข้อความ
         super().keyPressEvent(event)
 
     def wheelEvent(self, event):
@@ -594,6 +679,11 @@ class TemplateEditorDialog(QDialog):
         # ─── Tool State ───
         self.current_tool = TOOL_NONE
         
+        # ─── Dummy Preview Mode ───
+        self._preview_dummy = False
+        self._dummy_pixmap: QPixmap | None = None
+        self._load_dummy_pixmap()
+        
         # ─── Chroma Key Layer System ───
         self.chroma_layers: list[dict] = []
         self._active_layer_index = -1  # index ของ layer ที่กำลัง active
@@ -618,59 +708,131 @@ class TemplateEditorDialog(QDialog):
         self.setWindowTitle("Template Editor - ลากจัดเรียงช่องใส่รูป")
         self.resize(1200, 800)
         
-        # ปรับแต่งสีพื้นหลังหลักให้มืดๆ
-        self.setStyleSheet("""
-            QDialog {
-                background-color: #1a1a24;
-            }
-            QLabel {
-                color: #A0A0C0;
+        # ปรับแต่งสีพื้นหลังหลักและ Widgets ให้ตรงกับธีมส้ม/ดำ/เทา
+        self.setStyleSheet(f"""
+            QDialog {{
+                background-color: {BG_DARK};
+                color: {TEXT_PRIMARY};
+                font-family: "Google Sans", "Segoe UI", sans-serif;
+            }}
+            QLabel {{
+                color: {TEXT_PRIMARY};
                 font-size: 14px;
-            }
-            QPushButton {
-                padding: 12px;
+            }}
+            QPushButton {{
+                background-color: {BG_CARD};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
                 border-radius: 8px;
+                padding: 10px 16px;
                 font-weight: bold;
                 font-size: 14px;
-            }
-            QPushButton.primary {
-                background-color: #00CEC9;
-                color: #000;
-            }
-            QPushButton.primary:hover {
-                background-color: #00B5B5;
-            }
-            QPushButton.danger {
-                background-color: #FF5252;
-                color: #FFF;
-            }
-            QPushButton.danger:hover {
-                background-color: #FF3333;
-            }
-            QPushButton.normal {
-                background-color: #353550;
-                color: #FFF;
-            }
-            QPushButton.normal:hover {
-                background-color: #404060;
-            }
-            QToolButton {
-                padding: 8px;
+            }}
+            QPushButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QPushButton:pressed {{
+                background-color: {PRIMARY_PRESSED};
+            }}
+            QPushButton[cssClass="primary"], QPushButton.primary {{
+                background-color: {PRIMARY};
+                color: {TEXT_PRIMARY};
+                border: none;
+            }}
+            QPushButton[cssClass="primary"]:hover, QPushButton.primary:hover {{
+                background-color: {PRIMARY_HOVER};
+            }}
+            QPushButton[cssClass="primary"]:pressed, QPushButton.primary:pressed {{
+                background-color: {PRIMARY_PRESSED};
+            }}
+            QPushButton[cssClass="danger"], QPushButton.danger {{
+                background-color: {DANGER};
+                color: {TEXT_PRIMARY};
+                border: none;
+            }}
+            QPushButton[cssClass="danger"]:hover, QPushButton.danger:hover {{
+                background-color: #DC2626;
+            }}
+            QPushButton[cssClass="normal"], QPushButton.normal {{
+                background-color: {BG_CARD};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+            }}
+            QPushButton[cssClass="normal"]:hover, QPushButton.normal:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QToolButton {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
                 border-radius: 6px;
+                padding: 8px;
                 font-weight: bold;
                 font-size: 13px;
-                background-color: #353550;
-                color: #FFF;
-                border: 2px solid transparent;
-            }
-            QToolButton:hover {
-                background-color: #404060;
-            }
-            QToolButton:checked {
-                background-color: #00CEC9;
-                color: #000;
-                border: 2px solid #00FFF0;
-            }
+            }}
+            QToolButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QToolButton:checked {{
+                background-color: {PRIMARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {PRIMARY_HOVER};
+            }}
+            QToolButton:disabled {{
+                background-color: {BG_DARK};
+                color: {TEXT_MUTED};
+                border: 1px solid {BORDER};
+            }}
+            QGroupBox {{
+                background-color: {BG_CARD};
+                border: 1px solid {BORDER};
+                border-radius: 10px;
+                margin-top: 14px;
+                padding: 16px 12px 12px 12px;
+                font-size: 14px;
+                font-weight: 700;
+                color: {PRIMARY};
+            }}
+            QGroupBox::title {{
+                subcontrol-origin: margin;
+                subcontrol-position: top left;
+                padding: 2px 8px;
+                background-color: {BG_CARD};
+                border-radius: 4px;
+                color: {PRIMARY};
+            }}
+            QSlider {{
+                min-height: 28px;
+                max-height: 28px;
+                background: transparent;
+                padding-left: 4px;
+                padding-right: 4px;
+            }}
+            QSlider::groove:horizontal {{
+                height: 8px;
+                background: {BG_INPUT};
+                border: 1px solid {BORDER};
+                border-radius: 4px;
+            }}
+            QSlider::sub-page:horizontal {{
+                background: {PRIMARY};
+                border-radius: 4px;
+            }}
+            QSlider::handle:horizontal {{
+                background: #FFFFFF;
+                border: 2px solid {PRIMARY};
+                width: 14px;
+                margin-top: -4px;
+                margin-bottom: -4px;
+                border-radius: 8px;
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: #FFFFFF;
+                border: 2px solid {PRIMARY_HOVER};
+            }}
         """)
 
         layout = QHBoxLayout(self)
@@ -688,12 +850,13 @@ class TemplateEditorDialog(QDialog):
         font_title.setPointSize(18)
         font_title.setBold(True)
         title.setFont(font_title)
-        title.setStyleSheet("color: white;")
+        title.setStyleSheet(f"color: {TEXT_PRIMARY};")
         left_layout.addWidget(title)
         
         hint = QLabel("• ลากกล่องสี่เหลี่ยมเพื่อย้ายตำแหน่ง\n• ดึงขอบเพื่อยืดหดขนาด\n• ลากจุดวงกลมด้านบนเพื่อหมุน (Rotate)")
+        hint.setStyleSheet(f"color: {TEXT_MUTED}; font-size: 12px;")
         left_layout.addWidget(hint)
-        left_layout.addSpacing(20)
+        left_layout.addSpacing(15)
 
         # ปุ่มเพิ่ม/ลบ
         btn_layout = QHBoxLayout()
@@ -711,13 +874,35 @@ class TemplateEditorDialog(QDialog):
         left_layout.addLayout(btn_layout)
 
         self.list_slots = QListWidget()
-        self.list_slots.setStyleSheet("background-color: #242438; color: white; border: none; border-radius: 8px; padding: 8px; font-size: 16px;")
+        self.list_slots.setItemDelegate(SlotListDelegate(self.list_slots))
+        self.list_slots.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                border-radius: 8px;
+                padding: 4px;
+                font-size: 14px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 8px 10px;
+                border-radius: 6px;
+            }}
+            QListWidget::item:hover {{
+                background-color: {BG_HOVER};
+            }}
+            QListWidget::item:selected {{
+                background-color: {BG_HOVER};
+                border: 1px solid {PRIMARY};
+            }}
+        """)
         self.list_slots.currentRowChanged.connect(self._on_list_item_selected)
         left_layout.addWidget(self.list_slots)
         
         # ---------- Chroma Key Panel ----------
         grp_chroma = QGroupBox("ลบพื้นหลังสี (Chroma Key)")
-        grp_chroma.setStyleSheet("QGroupBox { color: white; font-weight: bold; } QLabel { color: #A0A0C0; }")
+        grp_chroma.setStyleSheet(f"QGroupBox {{ color: {PRIMARY}; font-weight: bold; }} QLabel {{ color: {TEXT_SECONDARY}; }}")
         chroma_layout = QVBoxLayout(grp_chroma)
         
         # ── ปุ่มเครื่องมือ ──
@@ -727,21 +912,29 @@ class TemplateEditorDialog(QDialog):
         self.btn_tool_picker = QToolButton()
         self.btn_tool_picker.setCheckable(True)
         self.btn_tool_picker.setToolTip("เครื่องมือดูดสี (Color Picker)")
-        # โหลด icon จากไฟล์
+        # โหลด icon จากไฟล์และแปลงเป็นสีขาว
         icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "color-picker.png")
         if os.path.exists(icon_path):
-            self.btn_tool_picker.setIcon(QIcon(icon_path))
+            self.btn_tool_picker.setIcon(_make_tinted_icon(icon_path, QColor("white")))
             self.btn_tool_picker.setIconSize(self.btn_tool_picker.sizeHint())
         else:
             self.btn_tool_picker.setText("🎨")
         self.btn_tool_picker.setFixedSize(44, 44)
-        self.btn_tool_picker.setStyleSheet("""
-            QToolButton {
-                padding: 6px; border-radius: 6px; background-color: #FFF;
-                border: 2px solid #555;
-            }
-            QToolButton:hover { background-color: #E0E0E0; }
-            QToolButton:checked { background-color: #B2DFDB; border: 2px solid #00CEC9; }
+        self.btn_tool_picker.setStyleSheet(f"""
+            QToolButton {{
+                padding: 6px;
+                border-radius: 6px;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER};
+            }}
+            QToolButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QToolButton:checked {{
+                background-color: {PRIMARY};
+                border: 1px solid {PRIMARY_HOVER};
+            }}
         """)
         self.btn_tool_picker.clicked.connect(self._on_tool_picker_clicked)
         tools_row.addWidget(self.btn_tool_picker)
@@ -752,6 +945,26 @@ class TemplateEditorDialog(QDialog):
         self.btn_tool_zone.setText("วาดโซน")
         self.btn_tool_zone.setToolTip("วาดพื้นที่ลบสี (Draw Zone)")
         self.btn_tool_zone.setFixedHeight(44)
+        self.btn_tool_zone.setStyleSheet(f"""
+            QToolButton {{
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+            }}
+            QToolButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QToolButton:checked {{
+                background-color: {PRIMARY};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {PRIMARY_HOVER};
+            }}
+        """)
         self.btn_tool_zone.clicked.connect(self._on_tool_zone_clicked)
         tools_row.addWidget(self.btn_tool_zone)
         
@@ -760,12 +973,19 @@ class TemplateEditorDialog(QDialog):
         self.btn_chroma_reset.setText("ล้างค่า")
         self.btn_chroma_reset.setToolTip("ล้างการตั้งค่าลบสีทั้งหมด")
         self.btn_chroma_reset.setFixedHeight(44)
-        self.btn_chroma_reset.setStyleSheet("""
-            QToolButton {
-                padding: 8px; border-radius: 6px; font-weight: bold; font-size: 13px;
-                background-color: #5C2A2A; color: #FF8A80; border: 2px solid transparent;
-            }
-            QToolButton:hover { background-color: #6E3333; }
+        self.btn_chroma_reset.setStyleSheet(f"""
+            QToolButton {{
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-weight: bold;
+                font-size: 13px;
+                background-color: {DANGER};
+                color: {TEXT_PRIMARY};
+                border: none;
+            }}
+            QToolButton:hover {{
+                background-color: #DC2626;
+            }}
         """)
         self.btn_chroma_reset.clicked.connect(self._reset_chroma_key)
         tools_row.addWidget(self.btn_chroma_reset)
@@ -775,10 +995,12 @@ class TemplateEditorDialog(QDialog):
         # ── แถวแสดงสีที่เลือก ──
         color_row = QHBoxLayout()
         color_label = QLabel("สีที่เลือก:")
+        color_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.lbl_color_indicator = QLabel()
         self.lbl_color_indicator.setFixedSize(30, 30)
-        self.lbl_color_indicator.setStyleSheet("background-color: transparent; border: 1px solid white;")
+        self.lbl_color_indicator.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; border-radius: 4px;")
         self.lbl_color_rgb = QLabel("(กดปุ่มดูดสี แล้วคลิกที่รูป)")
+        self.lbl_color_rgb.setStyleSheet(f"color: {TEXT_MUTED};")
         color_row.addWidget(color_label)
         color_row.addWidget(self.lbl_color_indicator)
         color_row.addWidget(self.lbl_color_rgb, stretch=1)
@@ -788,10 +1010,12 @@ class TemplateEditorDialog(QDialog):
         tol_layout = QHBoxLayout()
         tol_label = QLabel("Tolerance:")
         tol_label.setFixedWidth(70)
+        tol_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.slider_tolerance = QSlider(Qt.Orientation.Horizontal)
         self.slider_tolerance.setRange(0, 255)
         self.slider_tolerance.setValue(30)
         self.lbl_tol_val = QLabel("30")
+        self.lbl_tol_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-weight: bold;")
         self.slider_tolerance.valueChanged.connect(self._on_tolerance_changed)
         tol_layout.addWidget(tol_label)
         tol_layout.addWidget(self.slider_tolerance)
@@ -802,10 +1026,12 @@ class TemplateEditorDialog(QDialog):
         edge_layout = QHBoxLayout()
         edge_label = QLabel("Edge Crop:")
         edge_label.setFixedWidth(70)
+        edge_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.slider_edge = QSlider(Qt.Orientation.Horizontal)
         self.slider_edge.setRange(0, 10)
         self.slider_edge.setValue(0)
         self.lbl_edge_val = QLabel("0")
+        self.lbl_edge_val.setStyleSheet(f"color: {TEXT_PRIMARY}; font-weight: bold;")
         self.slider_edge.valueChanged.connect(self._on_edge_crop_changed)
         edge_layout.addWidget(edge_label)
         edge_layout.addWidget(self.slider_edge)
@@ -815,12 +1041,27 @@ class TemplateEditorDialog(QDialog):
         # ── Chroma Layer List ──
         layer_header = QHBoxLayout()
         lbl_layers = QLabel("Layer สีที่ลบ:")
-        lbl_layers.setStyleSheet("color: #B0B0D0; font-weight: bold;")
+        lbl_layers.setStyleSheet(f"color: {TEXT_SECONDARY}; font-weight: bold;")
         
-        self.btn_del_layer = QPushButton("❌")
+        self.btn_del_layer = QPushButton()
+        self.btn_del_layer.setIcon(_make_cross_icon(size=14, color=QColor("#FFFFFF")))
+        self.btn_del_layer.setIconSize(QSize(14, 14))
         self.btn_del_layer.setFixedSize(30, 30)
         self.btn_del_layer.setToolTip("ลบ Layer ที่เลือก")
-        self.btn_del_layer.setStyleSheet("background-color: #5C2A2A; color: #FF8A80; border-radius: 4px; padding: 0; font-size: 14px;")
+        self.btn_del_layer.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_del_layer.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {DANGER};
+                border-radius: 6px;
+                border: none;
+            }}
+            QPushButton:hover {{
+                background-color: #DC2626;
+            }}
+            QPushButton:pressed {{
+                background-color: #B91C1C;
+            }}
+        """)
         self.btn_del_layer.clicked.connect(self._delete_active_layer)
         
         layer_header.addWidget(lbl_layers)
@@ -829,9 +1070,29 @@ class TemplateEditorDialog(QDialog):
         chroma_layout.addLayout(layer_header)
         
         self.list_chroma_layers = QListWidget()
-        self.list_chroma_layers.setStyleSheet(
-            "background-color: #242438; color: white; border: none; border-radius: 8px; padding: 4px; font-size: 13px;"
-        )
+        self.list_chroma_layers.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                border-radius: 8px;
+                padding: 4px;
+                font-size: 13px;
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 6px 8px;
+                border-radius: 6px;
+                color: {TEXT_PRIMARY};
+            }}
+            QListWidget::item:hover {{
+                background-color: {BG_HOVER};
+            }}
+            QListWidget::item:selected {{
+                background-color: {BG_HOVER};
+                border: 1px solid {PRIMARY};
+            }}
+        """)
         self.list_chroma_layers.setMaximumHeight(120)
         self.list_chroma_layers.currentRowChanged.connect(self._on_chroma_layer_selected)
         chroma_layout.addWidget(self.list_chroma_layers)
@@ -842,17 +1103,46 @@ class TemplateEditorDialog(QDialog):
         # Zoom Controls
         zoom_layout = QHBoxLayout()
         zoom_label = QLabel("ซูม:")
+        zoom_label.setStyleSheet(f"color: {TEXT_SECONDARY};")
         self.lbl_zoom = QLabel("100%")
-        self.lbl_zoom.setStyleSheet("color: white; font-weight: bold; font-size: 16px;")
+        self.lbl_zoom.setStyleSheet(f"color: {TEXT_PRIMARY}; font-weight: bold; font-size: 15px;")
         
         btn_zoom_out = QPushButton("-")
         btn_zoom_out.setFixedSize(30, 30)
-        btn_zoom_out.setStyleSheet("background-color: #353550; color: white; border-radius: 4px; padding: 0;")
+        btn_zoom_out.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                border-radius: 6px;
+                padding: 0;
+                font-size: 16px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+        """)
         btn_zoom_out.clicked.connect(lambda: self.view.zoom_out())
         
         btn_zoom_in = QPushButton("+")
         btn_zoom_in.setFixedSize(30, 30)
-        btn_zoom_in.setStyleSheet("background-color: #353550; color: white; border-radius: 4px; padding: 0;")
+        btn_zoom_in.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                border-radius: 6px;
+                padding: 0;
+                font-size: 16px;
+                font-weight: bold;
+            }}
+            QPushButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+        """)
         btn_zoom_in.clicked.connect(lambda: self.view.zoom_in())
         
         zoom_layout.addWidget(zoom_label)
@@ -870,19 +1160,29 @@ class TemplateEditorDialog(QDialog):
         self.btn_undo.setToolTip("ย้อนกลับ (Ctrl+Z)")
         undo_icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "undo.png")
         if os.path.exists(undo_icon_path):
-            self.btn_undo.setIcon(QIcon(undo_icon_path))
+            self.btn_undo.setIcon(_make_tinted_icon(undo_icon_path, QColor("white")))
             self.btn_undo.setIconSize(self.btn_undo.sizeHint())
         else:
             self.btn_undo.setText("↩ Undo")
         self.btn_undo.setFixedSize(44, 44)
         self.btn_undo.setEnabled(False)
-        self.btn_undo.setStyleSheet("""
-            QToolButton {
-                padding: 6px; border-radius: 6px; background-color: #353550;
-                border: 2px solid #555; 
-            }
-            QToolButton:hover { background-color: #404060; }
-            QToolButton:disabled { background-color: #252535; border: 2px solid #333; }
+        self.btn_undo.setStyleSheet(f"""
+            QToolButton {{
+                padding: 6px;
+                border-radius: 6px;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER};
+                color: {TEXT_PRIMARY};
+            }}
+            QToolButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QToolButton:disabled {{
+                background-color: {BG_DARK};
+                border: 1px solid {BORDER};
+                color: {TEXT_MUTED};
+            }}
         """)
         self.btn_undo.clicked.connect(self._undo)
         undo_redo_layout.addWidget(self.btn_undo)
@@ -891,24 +1191,69 @@ class TemplateEditorDialog(QDialog):
         self.btn_redo.setToolTip("ย้อนคืน (Ctrl+Shift+Z)")
         redo_icon_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "redo.png")
         if os.path.exists(redo_icon_path):
-            self.btn_redo.setIcon(QIcon(redo_icon_path))
+            self.btn_redo.setIcon(_make_tinted_icon(redo_icon_path, QColor("white")))
             self.btn_redo.setIconSize(self.btn_redo.sizeHint())
         else:
             self.btn_redo.setText("↪ Redo")
         self.btn_redo.setFixedSize(44, 44)
         self.btn_redo.setEnabled(False)
-        self.btn_redo.setStyleSheet("""
-            QToolButton {
-                padding: 6px; border-radius: 6px; background-color: #353550;
-                border: 2px solid #555;
-            }
-            QToolButton:hover { background-color: #404060; }
-            QToolButton:disabled { background-color: #252535; border: 2px solid #333; }
+        self.btn_redo.setStyleSheet(f"""
+            QToolButton {{
+                padding: 6px;
+                border-radius: 6px;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER};
+                color: {TEXT_PRIMARY};
+            }}
+            QToolButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QToolButton:disabled {{
+                background-color: {BG_DARK};
+                border: 1px solid {BORDER};
+                color: {TEXT_MUTED};
+            }}
         """)
         self.btn_redo.clicked.connect(self._redo)
         undo_redo_layout.addWidget(self.btn_redo)
         
+        # สลับมุมมอง Slot อยู่ขวาสุดในแถวเดียวกับ Undo/Redo
         undo_redo_layout.addStretch()
+        
+        self.btn_toggle_view = QToolButton()
+        self.btn_toggle_view.setCheckable(True)
+        self.btn_toggle_view.setToolTip("สลับมุมมอง Slot: โปร่งใส / รูปตัวอย่าง")
+        self.btn_toggle_view.setFixedSize(44, 44)
+        self.btn_toggle_view.setCursor(Qt.CursorShape.PointingHandCursor)
+        
+        # โหลด icon ตามสถานะ
+        self._icon_transparent = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "transparent.png")
+        self._icon_dummy_view = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "image", "dummy_view.png")
+        
+        if os.path.exists(self._icon_transparent):
+            self.btn_toggle_view.setIcon(QIcon(self._icon_transparent))
+            self.btn_toggle_view.setIconSize(QSize(28, 28))
+        
+        self.btn_toggle_view.setStyleSheet(f"""
+            QToolButton {{
+                padding: 6px;
+                border-radius: 6px;
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER};
+            }}
+            QToolButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+            QToolButton:checked {{
+                background-color: {PRIMARY};
+                border: 1px solid {PRIMARY_HOVER};
+            }}
+        """)
+        self.btn_toggle_view.clicked.connect(self._on_toggle_dummy_preview)
+        undo_redo_layout.addWidget(self.btn_toggle_view)
+        
         left_layout.addLayout(undo_redo_layout)
         left_layout.addSpacing(10)
 
@@ -927,7 +1272,7 @@ class TemplateEditorDialog(QDialog):
         layout.addWidget(left_panel)
 
         # ---------- Right Panel (Canvas) ----------
-        self.scene = QGraphicsScene()
+        self.scene = QGraphicsScene(self)
         self.scene.selectionChanged.connect(self._on_scene_selection_changed)
         
         self.view = TemplateGraphicsView(self.scene, dialog=self)
@@ -940,9 +1285,15 @@ class TemplateEditorDialog(QDialog):
         QShortcut(QKeySequence("Ctrl+0"), self).activated.connect(self.view.reset_zoom)
         # Shortcut Escape เพื่อยกเลิกเครื่องมือ
         QShortcut(QKeySequence("Escape"), self).activated.connect(self._deactivate_tool)
-        # Shortcuts for Undo/Redo
-        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(self._undo)
-        QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(self._redo)
+        # Shortcuts for Undo/Redo — guard ไม่ให้ fire ถ้า focus อยู่ใน text input
+        def _undo_guarded():
+            if not self._is_text_input_focused():
+                self._undo()
+        def _redo_guarded():
+            if not self._is_text_input_focused():
+                self._redo()
+        QShortcut(QKeySequence("Ctrl+Z"), self).activated.connect(_undo_guarded)
+        QShortcut(QKeySequence("Ctrl+Shift+Z"), self).activated.connect(_redo_guarded)
         # Shortcuts for Slot Copy/Paste/Duplicate/Delete
         QShortcut(QKeySequence("Ctrl+C"), self).activated.connect(self._on_shortcut_copy)
         QShortcut(QKeySequence("Ctrl+V"), self).activated.connect(self._on_shortcut_paste)
@@ -961,6 +1312,40 @@ class TemplateEditorDialog(QDialog):
         self.view.setBackgroundBrush(QBrush(bg_pixmap))
         
         layout.addWidget(self.view, stretch=1)
+
+    # ═══════════════════════════════════════════════════
+    #  Dummy Preview Management
+    # ═══════════════════════════════════════════════════
+
+    def _load_dummy_pixmap(self) -> None:
+        """โหลด dummy.jpg เป็น QPixmap แคชไว้ใช้ตอน preview"""
+        dummy_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            "image", "dummy.jpg"
+        )
+        if os.path.exists(dummy_path):
+            self._dummy_pixmap = QPixmap(dummy_path)
+        else:
+            self._dummy_pixmap = None
+            logger.warning("ไม่พบไฟล์ dummy.jpg ที่ %s", dummy_path)
+
+    def _on_toggle_dummy_preview(self) -> None:
+        """สลับโหมดมุมมอง Slot: โปร่งใส ↔ รูปตัวอย่าง"""
+        self._preview_dummy = self.btn_toggle_view.isChecked()
+        
+        # สลับ icon ตามสถานะ
+        if self._preview_dummy:
+            if os.path.exists(self._icon_dummy_view):
+                self.btn_toggle_view.setIcon(QIcon(self._icon_dummy_view))
+                self.btn_toggle_view.setIconSize(QSize(28, 28))
+        else:
+            if os.path.exists(self._icon_transparent):
+                self.btn_toggle_view.setIcon(QIcon(self._icon_transparent))
+                self.btn_toggle_view.setIconSize(QSize(28, 28))
+        
+        # repaint ทุก Slot
+        for slot in self.slots:
+            slot.update()
 
     # ═══════════════════════════════════════════════════
     #  Tool State Management
@@ -1147,33 +1532,8 @@ class TemplateEditorDialog(QDialog):
             self._delete_slot()
 
     def keyPressEvent(self, event) -> None:
-        """ดักจับคีย์ลัดในระดับ Dialog โดยไม่ขัดขวางการพิมพ์ในช่องข้อความ"""
-        focus_w = self.focusWidget()
-        from PyQt6.QtWidgets import QLineEdit, QTextEdit, QPlainTextEdit
-        if isinstance(focus_w, (QLineEdit, QTextEdit, QPlainTextEdit)):
-            super().keyPressEvent(event)
-            return
-
-        key = event.key()
-        modifiers = event.modifiers()
-        if modifiers == Qt.KeyboardModifier.ControlModifier:
-            if key == Qt.Key.Key_C:
-                self.copy_selected_slot()
-                event.accept()
-                return
-            elif key == Qt.Key.Key_V:
-                self.paste_slot()
-                event.accept()
-                return
-            elif key == Qt.Key.Key_D:
-                self.duplicate_selected_slot()
-                event.accept()
-                return
-        elif key == Qt.Key.Key_Delete:
-            self._delete_slot()
-            event.accept()
-            return
-
+        """ดักจับคีย์ลัดในระดับ Dialog — QShortcut จัดการ Ctrl+C/V/D/Delete แล้ว
+        keyPressEvent นี้ใช้เพื่อรับ event ที่ QShortcut ไม่ครอบคลุมเท่านั้น"""
         super().keyPressEvent(event)
 
     # ─── Copy / Paste / Duplicate Logic ───
@@ -1390,6 +1750,9 @@ class TemplateEditorDialog(QDialog):
             if linked:
                 group_color = item.get_group_color()
                 list_item.setForeground(group_color)
+                font = list_item.font()
+                font.setBold(True)
+                list_item.setFont(font)
             self.list_slots.addItem(list_item)
 
     def _on_link_requested(self, source_item: ResizableRectItem, target_photo_index: int) -> None:
@@ -1416,18 +1779,57 @@ class TemplateEditorDialog(QDialog):
 
     def _on_scene_selection_changed(self) -> None:
         """เมื่อคลิกเลือกของใน scene ให้ไฮไลต์รายการใน list ด้วย"""
-        selected_items = self.scene.selectedItems()
-        if selected_items and selected_items[0] in self.slots:
-            idx = self.slots.index(selected_items[0])
-            self.list_slots.setCurrentRow(idx)
+        try:
+            if not hasattr(self, 'scene') or self.scene is None or sip.isdeleted(self.scene):
+                return
+            selected_items = self.scene.selectedItems()
+            if selected_items and selected_items[0] in self.slots:
+                idx = self.slots.index(selected_items[0])
+                if hasattr(self, 'list_slots') and not sip.isdeleted(self.list_slots):
+                    self.list_slots.setCurrentRow(idx)
+        except RuntimeError:
+            pass
             
     def _on_list_item_selected(self, row: int) -> None:
         """เมื่อจิ้มรายการใน list ให้ไฮไลต์กล่องใน scene ด้วย"""
-        if row >= 0 and row < len(self.slots):
-            self.scene.clearSelection()
-            self.slots[row].setSelected(True)
-        # ซ่อนกรอบ ROI ทั้งหมดเมื่อเลือก Slot
-        self._hide_all_roi_rects()
+        try:
+            if not hasattr(self, 'scene') or self.scene is None or sip.isdeleted(self.scene):
+                return
+            if row >= 0 and row < len(self.slots):
+                self.scene.clearSelection()
+                if row < len(self.slots):
+                    self.slots[row].setSelected(True)
+            # ซ่อนกรอบ ROI ทั้งหมดเมื่อเลือก Slot
+            self._hide_all_roi_rects()
+        except RuntimeError:
+            pass
+
+    def closeEvent(self, event) -> None:
+        """ตัดการเชื่อมต่อสัญญาณก่อนปิด dialog เพื่อป้องกัน C++ deleted object error"""
+        try:
+            if hasattr(self, 'scene') and self.scene is not None and not sip.isdeleted(self.scene):
+                self.scene.selectionChanged.disconnect(self._on_scene_selection_changed)
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    def reject(self) -> None:
+        """เมื่อยกเลิกหรือปิด dialog"""
+        try:
+            if hasattr(self, 'scene') and self.scene is not None and not sip.isdeleted(self.scene):
+                self.scene.selectionChanged.disconnect(self._on_scene_selection_changed)
+        except Exception:
+            pass
+        super().reject()
+
+    def accept(self) -> None:
+        """เมื่อบันทึกและปิด dialog"""
+        try:
+            if hasattr(self, 'scene') and self.scene is not None and not sip.isdeleted(self.scene):
+                self.scene.selectionChanged.disconnect(self._on_scene_selection_changed)
+        except Exception:
+            pass
+        super().accept()
 
     # ═══════════════════════════════════════════════════
     #  Chroma Key: Color Picking
@@ -1820,7 +2222,7 @@ class TemplateEditorDialog(QDialog):
                 self.lbl_color_indicator.setStyleSheet(f"background-color: {hex_color}; border: 1px solid white;")
                 self.lbl_color_rgb.setText(f"RGB: ({r}, {g}, {b})")
             else:
-                self.lbl_color_indicator.setStyleSheet("background-color: transparent; border: 1px solid white;")
+                self.lbl_color_indicator.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; border-radius: 4px;")
                 self.lbl_color_rgb.setText("(กดปุ่มดูดสี แล้วคลิกที่รูป)")
             
             # รีเซ็ต sliders
@@ -1869,7 +2271,7 @@ class TemplateEditorDialog(QDialog):
         self._updating_sliders = False
         
         # รีเซ็ต color indicator
-        self.lbl_color_indicator.setStyleSheet("background-color: transparent; border: 1px solid white;")
+        self.lbl_color_indicator.setStyleSheet(f"background-color: transparent; border: 1px solid {BORDER}; border-radius: 4px;")
         self.lbl_color_rgb.setText("(กดปุ่มดูดสี แล้วคลิกที่รูป)")
         
         # คืนเครื่องมือเป็นปกติ
@@ -1899,8 +2301,21 @@ class TemplateEditorDialog(QDialog):
 
         try:
             # 1. คัดลอก/บันทึกภาพไปยัง assets/templates/
-            if self.processed_image:
-                # ถ้ามีการตัดสีแล้ว ให้เซฟภาพจาก processed_image เป็น PNG (มีช่องโหว่โปร่งใส)
+            if self.chroma_layers and self.processed_image:
+                # ถ้ามีการตัดสีแล้ว ให้เซฟเป็น PNG เสมอ (PNG รองรับ Alpha/โปร่งใส)
+                png_filename = basename + ".png"
+                dest_img_path = os.path.join(self.dest_dir, png_filename)
+                dest_json_path = os.path.join(self.dest_dir, f"{basename}.json")
+                self.processed_image.save(dest_img_path, format="PNG")
+                
+                # ถ้าไฟล์ต้นฉบับอยู่ใน dest_dir แต่เป็นนามสกุลอื่น (เช่น .jpg) ลบตัวเก่าออกเพื่อไม่ให้มีไฟล์ซ้ำในหน้ารายการ
+                old_dest_img = os.path.join(self.dest_dir, filename)
+                if old_dest_img != dest_img_path and os.path.exists(old_dest_img):
+                    try:
+                        os.remove(old_dest_img)
+                    except OSError:
+                        pass
+            elif self.processed_image and filename.lower().endswith(".png"):
                 self.processed_image.save(dest_img_path, format="PNG")
             else:
                 if self.image_path != dest_img_path:

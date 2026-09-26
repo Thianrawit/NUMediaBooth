@@ -8,7 +8,7 @@ FinishWidget — หน้าเสร็จสิ้นการถ่ายภ
 import os
 from path_manager import get_resource_path
 
-from PyQt6.QtCore import Qt, pyqtSignal, QSize
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtWidgets import (
     QWidget,
@@ -16,7 +16,6 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSpacerItem,
     QSizePolicy,
     QFrame
 )

@@ -13,13 +13,11 @@ Signal จากแต่ละ Widget จะถูก connect ไว้ที�
 import os
 import logging
 
-from PyQt6.QtCore import Qt, QSize, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QIcon, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtGui import QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QMainWindow,
     QStackedWidget,
-    QWidget,
-    QVBoxLayout,
     QMessageBox,
     QDialog,
 )
@@ -36,10 +34,9 @@ from ui.setting_widget import SettingWidget
 from ui.capture_widget import CameraCaptureWidget
 from ui.finish_widget import FinishWidget
 from ui.printer_alert_dialog import PrinterAlertDialog
-from ui.styles import GLOBAL_STYLESHEET
+from ui.styles import GLOBAL_STYLESHEET, init_app_font_and_locale
 from path_manager import get_resource_path, get_documents_path
 import qrcode
-from PIL import ImageQt
 
 logger = logging.getLogger(__name__)
 
@@ -98,7 +95,9 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1024, 700)
         self.resize(1200, 800)
 
-        # ตั้ง stylesheet ทั้งแอป
+        # ตั้ง font, locale บังคับเลขอารบิก และ stylesheet ทั้งแอป
+        from PyQt6.QtWidgets import QApplication
+        init_app_font_and_locale(QApplication.instance())
         self.setStyleSheet(GLOBAL_STYLESHEET)
 
         logger.info("Initializing MainWindow")
@@ -160,7 +159,7 @@ class MainWindow(QMainWindow):
             qr.make(fit=True)
             
             img = qr.make_image(fill_color="black", back_color="white")
-            pil_image = img.get_image().convert("RGB")
+            pil_image = (img.get_image() if hasattr(img, "get_image") else img).convert("RGB")
             
             # Backup ลงไฟล์
             save_dir = get_documents_path("saveSetting")
@@ -184,7 +183,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(self.stacked)
 
         # Page 0: Home
-        self.home_widget = HomeWidget()
+        self.home_widget = HomeWidget(config_manager=self.config_manager)
         self.stacked.addWidget(self.home_widget)  # index 0
 
         # Page 1: Template Select

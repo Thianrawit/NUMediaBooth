@@ -4,7 +4,6 @@ import shutil
 import hashlib
 import logging
 import subprocess
-import ctypes
 from pathlib import Path
 
 import requests
@@ -15,7 +14,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 logger = logging.getLogger(__name__)
 
-CURRENT_VERSION = "v1.8"
+CURRENT_VERSION = "v1.9"
 API_URL = "https://api.github.com/repos/Thianrawit/NUMediaBooth/releases/latest"
 
 # GitHub บังคับว่าต้องมี User-Agent ไม่งั้นบางทีโดน reject เฉยๆ แบบงงๆ

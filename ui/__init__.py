@@ -17,4 +17,5 @@ __all__ = [
     "TemplateSelectWidget",
     "SettingWidget",
     "CameraCaptureWidget",
+    "FinishWidget",
 ]

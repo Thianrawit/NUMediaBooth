@@ -5,35 +5,37 @@ Shared Stylesheet สำหรับ NUMediaBooth
 แก้ตรงนี้ที่เดียว = เปลี่ยน theme ทั้งแอป
 """
 
-# ==================== สี Theme ====================
-# สีหลัก (Primary)
-PRIMARY = "#6C5CE7"          # ม่วงสดใส
-PRIMARY_HOVER = "#5A4BD1"    # ม่วงเข้มตอน hover
-PRIMARY_PRESSED = "#4834B5"  # ม่วงเข้มตอนกด
+import os
 
-# สีเสริม (Accent)
-ACCENT = "#00CEC9"           # เขียวมิ้นท์
-ACCENT_HOVER = "#00B5B0"
+# ==================== สี Theme (ส้ม ดำ ขาว เทา) ====================
+# สีหลัก (Primary - ส้มสดใส มีพลัง)
+PRIMARY = "#FF6B2B"          # ส้มเอกลักษณ์
+PRIMARY_HOVER = "#E85A1F"    # ส้มเข้มตอน hover
+PRIMARY_PRESSED = "#D04C16"  # ส้มเข้มตอนกด
 
-# สีพื้นหลัง
-BG_DARK = "#1E1E2E"          # พื้นหลังหลัก (เทาเข้มอมม่วง)
-BG_CARD = "#2A2A3E"          # พื้นหลังการ์ด
-BG_INPUT = "#353550"         # พื้นหลัง input field
-BG_HOVER = "#3A3A55"         # พื้นหลัง hover
+# สีเสริม (Accent - ส้มสว่าง / Amber)
+ACCENT = "#FFA040"           # ส้มอ่อน / สว่าง
+ACCENT_HOVER = "#FF8F20"
 
-# สีข้อความ
-TEXT_PRIMARY = "#FFFFFF"
-TEXT_SECONDARY = "#A0A0C0"
-TEXT_MUTED = "#6C6C8A"
+# สีพื้นหลัง (ดำ / เทาเข้ม)
+BG_DARK = "#121214"          # ดำลึก สบายตา
+BG_CARD = "#1C1C1F"          # การ์ดเทาเข้ม
+BG_INPUT = "#26262B"         # input field
+BG_HOVER = "#2F2F36"         # พื้นหลัง hover
+
+# สีข้อความ (ขาว / เทา)
+TEXT_PRIMARY = "#FFFFFF"     # ขาว
+TEXT_SECONDARY = "#B0B0BC"   # เทากลาง สะอาดตา
+TEXT_MUTED = "#767682"       # เทาหม่น
 
 # สีขอบ
-BORDER = "#404060"
-BORDER_FOCUS = PRIMARY
+BORDER = "#3E3E46"
+BORDER_FOCUS = PRIMARY       # สีส้มตอน focus
 
 # สี Status
-SUCCESS = "#00E676"
-WARNING = "#FFD600"
-DANGER = "#FF5252"
+SUCCESS = "#22C55E"
+WARNING = "#F59E0B"
+DANGER = "#EF4444"
 
 
 # ==================== Global Stylesheet ====================
@@ -43,7 +45,7 @@ GLOBAL_STYLESHEET = f"""
 QMainWindow, QWidget {{
     background-color: {BG_DARK};
     color: {TEXT_PRIMARY};
-    font-family: "Segoe UI", "Noto Sans Thai", sans-serif;
+    font-family: "Google Sans", "Segoe UI", sans-serif;
     font-size: 14px;
 }}
 
@@ -299,6 +301,95 @@ QSpinBox:focus {{
     border-color: {BORDER_FOCUS};
 }}
 
+/* ===== QListWidget ===== */
+QListWidget {{
+    background-color: {BG_INPUT};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 4px;
+    outline: none;
+}}
+
+QListWidget::item {{
+    padding: 8px 12px;
+    border-radius: 6px;
+}}
+
+QListWidget::item:hover {{
+    background-color: {BG_HOVER};
+}}
+
+QListWidget::item:selected {{
+    background-color: {PRIMARY};
+    font-weight: 600;
+}}
+
+/* ===== QMenu ===== */
+QMenu {{
+    background-color: {BG_CARD};
+    color: {TEXT_PRIMARY};
+    border: 1px solid {BORDER};
+    border-radius: 8px;
+    padding: 4px;
+    font-size: 13px;
+}}
+
+QMenu::item {{
+    padding: 6px 20px;
+    border-radius: 4px;
+}}
+
+QMenu::item:selected {{
+    background-color: {PRIMARY};
+    color: {TEXT_PRIMARY};
+}}
+
+QMenu::item:disabled {{
+    color: {TEXT_MUTED};
+}}
+
+QMenu::separator {{
+    height: 1px;
+    background: {BORDER};
+    margin: 4px 8px;
+}}
+
+/* ===== QSlider ===== */
+QSlider {{
+    min-height: 28px;
+    max-height: 28px;
+    background: transparent;
+    padding-left: 4px;
+    padding-right: 4px;
+}}
+
+QSlider::groove:horizontal {{
+    height: 8px;
+    background: {BG_INPUT};
+    border: 1px solid {BORDER};
+    border-radius: 4px;
+}}
+
+QSlider::sub-page:horizontal {{
+    background: {PRIMARY};
+    border-radius: 4px;
+}}
+
+QSlider::handle:horizontal {{
+    background: #FFFFFF;
+    border: 2px solid {PRIMARY};
+    width: 14px;
+    margin-top: -4px;
+    margin-bottom: -4px;
+    border-radius: 8px;
+}}
+
+QSlider::handle:horizontal:hover {{
+    background: #FFFFFF;
+    border: 2px solid {PRIMARY_HOVER};
+}}
+
 /* ===== Template Card (สำหรับหน้าเลือก Template) ===== */
 QPushButton[cssClass="template-card"] {{
     background-color: {BG_CARD};
@@ -319,3 +410,40 @@ QPushButton[cssClass="template-card-selected"] {{
     padding: 8px;
 }}
 """
+
+
+def init_app_font_and_locale(app=None) -> str:
+    """ตั้งค่า Font (Google Sans), Locale (บังคับใช้เลขอารบิก), และคืนชื่อ Font family ที่โหลดได้"""
+    from PyQt6.QtCore import QLocale
+    from PyQt6.QtGui import QFontDatabase, QFont
+    from path_manager import get_resource_path
+    import logging
+
+    _logger = logging.getLogger(__name__)
+
+    # 1. บังคับใช้เลขอารบิกทั่วทั้งโปรแกรม (ป้องกัน Windows th_TH แปลงตัวเลขเป็นเลขไทย)
+    QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
+
+    # 2. โหลด Google Sans Font
+    font_path = get_resource_path(os.path.join("Font", "GoogleSans-VariableFont_GRAD,opsz,wght.ttf"))
+    family_name = "Google Sans"
+
+    if os.path.exists(font_path):
+        font_id = QFontDatabase.addApplicationFont(font_path)
+        if font_id != -1:
+            families = QFontDatabase.applicationFontFamilies(font_id)
+            if families:
+                family_name = families[0]
+                _logger.info("โหลด Google Sans Font สำเร็จ: %s", family_name)
+        else:
+            _logger.warning("ไม่สามารถโหลด Font จาก: %s", font_path)
+    else:
+        _logger.warning("ไม่พบไฟล์ Font ที่: %s", font_path)
+
+    # 3. ตั้งค่า Font เริ่มต้นให้กับ QApplication
+    if app is not None:
+        app_font = QFont(family_name, 10)
+        app.setFont(app_font)
+
+    return family_name
+

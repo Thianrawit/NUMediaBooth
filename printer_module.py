@@ -4,7 +4,7 @@ try:
 except ImportError:
     win32print = None
 
-from PyQt6.QtCore import Qt, QSizeF, QMarginsF, QRectF
+from PyQt6.QtCore import QSizeF, QMarginsF, QRectF
 from PyQt6.QtGui import QImage, QPainter, QPageSize, QPageLayout
 from PyQt6.QtPrintSupport import QPrinter, QPrinterInfo
 

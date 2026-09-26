@@ -8,16 +8,14 @@ SettingWidget — หน้าตั้งค่าหลัก
 """
 
 import os
-import shutil
 import logging
 
-from PyQt6.QtCore import Qt, pyqtSignal, QSizeF, QSize
-from PyQt6.QtGui import QFont, QPageSize, QPainter, QIcon, QPixmap
+from PyQt6.QtCore import Qt, pyqtSignal, QSizeF, QSize, QLocale, QUrl
+from PyQt6.QtGui import QFont, QPageSize, QPainter, QIcon, QPixmap, QDesktopServices
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
-    QFormLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -37,6 +35,11 @@ from ui.template_editor_dialog import TemplateEditorDialog
 from PyQt6.QtWidgets import QCheckBox, QApplication
 from config_manager import ConfigManager
 from ui.raw_images_dialog import RawImagesDialog
+from ui.styles import (
+    BG_INPUT, BG_HOVER,
+    TEXT_PRIMARY, BORDER,
+    PRIMARY, PRIMARY_HOVER
+)
 from auto_updater import CURRENT_VERSION
 from path_manager import get_resource_path, get_dynamic_path
 
@@ -104,19 +107,37 @@ class KeyBindButton(QPushButton):
         """อัปเดตข้อความบนปุ่มให้แสดงชื่อปุ่มปัจจุบัน"""
         name = self._key_to_name(self.current_key)
         self.setText(f"🎮  {name}")
-        self.setStyleSheet(
-            "background-color: #353550; color: white; border: 2px solid #555; "
-            "border-radius: 6px; padding: 4px 12px; font-size: 13px;"
-        )
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {BG_INPUT};
+                color: {TEXT_PRIMARY};
+                border: 1px solid {BORDER};
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-size: 13px;
+                font-weight: 500;
+            }}
+            QPushButton:hover {{
+                background-color: {BG_HOVER};
+                border-color: {PRIMARY};
+            }}
+        """)
         
     def _start_listening(self):
         """เข้าสู่โหมดรอรับปุ่ม"""
         self._listening = True
         self.setText("⌨️  กดปุ่มที่ต้องการ...")
-        self.setStyleSheet(
-            "background-color: #FF6B2B; color: white; border: 2px solid #FF6B2B; "
-            "border-radius: 6px; padding: 4px 12px; font-size: 13px; font-weight: bold;"
-        )
+        self.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {PRIMARY};
+                color: {TEXT_PRIMARY};
+                border: 2px solid {PRIMARY_HOVER};
+                border-radius: 6px;
+                padding: 4px 12px;
+                font-size: 13px;
+                font-weight: bold;
+            }}
+        """)
         self.setFocus()
         
     def keyPressEvent(self, event):
@@ -259,6 +280,7 @@ class SettingWidget(QWidget):
         countdown_row.addWidget(countdown_label)
         
         self.spin_countdown = QSpinBox()
+        self.spin_countdown.setLocale(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
         self.spin_countdown.setRange(1, 10)
         self.spin_countdown.setValue(3)
         self.spin_countdown.setSuffix(" วินาที")
@@ -291,14 +313,14 @@ class SettingWidget(QWidget):
         # View Raw Images and Clear Cache
         self.btn_view_raw = QPushButton("ดูรูปดิบทั้งหมดในโฟลเดอร์ชั่วคราว")
         self.btn_view_raw.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_view_raw.setFixedHeight(40)
+        self.btn_view_raw.setFixedHeight(45)
         self.btn_view_raw.setProperty("cssClass", "accent")
         self.btn_view_raw.clicked.connect(self._view_raw_images)
         general_layout.addWidget(self.btn_view_raw)
 
         self.btn_clear_cache = QPushButton("ล้างแคช (รูปชั่วคราวและ Logs)")
         self.btn_clear_cache.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_clear_cache.setFixedHeight(40)
+        self.btn_clear_cache.setFixedHeight(45)
         self.btn_clear_cache.setProperty("cssClass", "danger")
         self.btn_clear_cache.clicked.connect(self._clear_cache)
         general_layout.addWidget(self.btn_clear_cache)
@@ -409,6 +431,7 @@ class SettingWidget(QWidget):
         copies_row.addWidget(copies_label)
         
         self.spin_copies = QSpinBox()
+        self.spin_copies.setLocale(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
         self.spin_copies.setRange(1, 10)
         self.spin_copies.setValue(1)
         self.spin_copies.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -513,21 +536,27 @@ class SettingWidget(QWidget):
         # รายการ Template ที่มีอยู่
         self.list_templates = QListWidget()
         self.list_templates.setFixedHeight(150)
-        self.list_templates.setStyleSheet("""
-            QListWidget {
-                background-color: #242438;
-                border: 1px solid #353550;
+        self.list_templates.setStyleSheet(f"""
+            QListWidget {{
+                background-color: {BG_INPUT};
+                border: 1px solid {BORDER};
                 border-radius: 8px;
                 padding: 4px;
-            }
-            QListWidget::item {
-                padding: 8px;
-                border-bottom: 1px solid #353550;
-            }
-            QListWidget::item:selected {
-                background-color: #00CEC9;
-                color: black;
-            }
+                outline: none;
+            }}
+            QListWidget::item {{
+                padding: 8px 12px;
+                border-bottom: 1px solid {BORDER};
+                color: {TEXT_PRIMARY};
+            }}
+            QListWidget::item:hover {{
+                background-color: {BG_HOVER};
+            }}
+            QListWidget::item:selected {{
+                background-color: {PRIMARY};
+                color: {TEXT_PRIMARY};
+                font-weight: bold;
+            }}
         """)
         
         # เพิ่มปุ่ม แก้ไข/ลบ ใต้ลิสต์
@@ -747,7 +776,7 @@ class SettingWidget(QWidget):
                     try:
                         os.remove(fpath)
                         deleted_logs += 1
-                    except Exception as e:
+                    except Exception:
                         # ไฟล์ที่กำลังใช้งานอยู่ (เช่น appError.log หรือ app.log) ลบไม่ได้
                         # เลยจะเคลียร์ข้อมูลข้างในไฟล์แทน (Truncate)
                         try:
@@ -862,7 +891,10 @@ class SettingWidget(QWidget):
     def _open_templates_dir(self) -> None:
         """เปิดโฟลเดอร์ templates ใน File Explorer"""
         os.makedirs(self.templates_dir, exist_ok=True)
-        os.startfile(self.templates_dir)  # Windows only
+        if hasattr(os, "startfile"):
+            os.startfile(self.templates_dir)
+        else:
+            QDesktopServices.openUrl(QUrl.fromLocalFile(self.templates_dir))
 
     def _on_save_clicked(self) -> None:
         """บันทึกการตั้งค่า → emit settings dict"""
@@ -913,7 +945,7 @@ class SettingWidget(QWidget):
             # เปิด QPainter เพื่อเขียนข้อความทดสอบลงปริ้นเตอร์
             painter = QPainter()
             if painter.begin(printer):
-                font = QFont("Arial", 20, QFont.Weight.Bold)
+                font = QFont("Google Sans", 20, QFont.Weight.Bold)
                 painter.setFont(font)
                 painter.drawText(100, 100, "NUMedia Booth - Test Print")
                 painter.drawText(100, 150, f"Printer: {printer_name}")

@@ -11,7 +11,7 @@ import json
 import logging
 
 from PyQt6.QtCore import Qt, pyqtSignal, QSize, QTimer
-from PyQt6.QtGui import QPixmap, QFont, QIcon, QColor
+from PyQt6.QtGui import QFont, QIcon, QColor
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -50,14 +50,14 @@ class TemplateListWidget(QListWidget):
                 border: none;
             }
             QListWidget::item {
-                background: #353550;
+                background: #26262B;
                 border-radius: 8px;
                 padding: 10px;
                 color: #FFFFFF;
             }
             QListWidget::item:selected {
-                background: #4A4A6A;
-                border: 3px solid #00E676;
+                background: #2F2F36;
+                border: 3px solid #FF6B2B;
             }
         """)
 
@@ -295,19 +295,19 @@ class TemplateSelectWidget(QWidget):
         for i in range(total):
             item = self.list_widget.item(i)
             if i == self.current_selected_index:
-                item.setBackground(QColor("#4A4A6A"))
+                item.setBackground(QColor("#2F2F36"))
                 # ใช้ setCurrentItem เพื่อให้ QListWidget ไฮไลต์ + scroll ตาม
                 self.list_widget.setCurrentItem(item)
                 self.list_widget.scrollToItem(item)
             else:
-                item.setBackground(QColor("#353550"))
+                item.setBackground(QColor("#26262B"))
                 
         # อัปเดตข้อความด้านล่าง
         selected_item = self.list_widget.item(self.current_selected_index)
         if selected_item:
             name = selected_item.data(Qt.ItemDataRole.UserRole + 2) or selected_item.text()
             self.label_selected.setText(f"✅ เลือก: {name}")
-            self.label_selected.setStyleSheet("color: #00E676; font-size: 13px;")
+            self.label_selected.setStyleSheet("color: #FF6B2B; font-size: 13px; font-weight: bold;")
             self.btn_next.setEnabled(True)
         
     def wheelEvent(self, event):
@@ -367,8 +367,8 @@ class TemplateSelectWidget(QWidget):
             try:
                 with open(order_path, "r", encoding="utf-8") as f:
                     order_list = json.load(f)
-            except:
-                pass
+            except Exception as e:
+                logger.warning("โหลดไฟล์ template_order.json ไม่สำเร็จ (ใช้ค่าเริ่มต้น): %s", e)
 
         valid_ext = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
         files = [f for f in os.listdir(self.templates_dir) if os.path.splitext(f)[1].lower() in valid_ext]
@@ -407,8 +407,8 @@ class TemplateSelectWidget(QWidget):
                 try:
                     with open(json_path, "r", encoding="utf-8") as jf:
                         layout_config = json.load(jf)
-                except:
-                    pass
+                except Exception as e:
+                    logger.warning("โหลด layout config ของ %s ไม่สำเร็จ: %s", name, e)
                     
             item.setData(Qt.ItemDataRole.UserRole, layout_config)
             item.setData(Qt.ItemDataRole.UserRole + 1, path)
@@ -553,7 +553,7 @@ class TemplateSelectWidget(QWidget):
             item = selected_items[0]
             name = item.text()
             self.label_selected.setText(f"✅ เลือก: {name}")
-            self.label_selected.setStyleSheet("color: #00E676; font-size: 13px;")
+            self.label_selected.setStyleSheet("color: #FF6B2B; font-size: 13px; font-weight: bold;")
             self.btn_next.setEnabled(True)
         else:
             self.label_selected.setText("ยังไม่ได้เลือก Template")

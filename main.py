@@ -10,16 +10,20 @@ import logging
 import time
 
 from PyQt6.QtWidgets import QApplication, QSplashScreen
-from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtCore import Qt, QTimer, QLocale
 from PyQt6.QtGui import QIcon, QPixmap
 
 from ui import MainWindow
+from ui.styles import init_app_font_and_locale
 from logger_setup import setup_logger
 from path_manager import get_dynamic_path, get_resource_path
 from auto_updater import AutoUpdater
 
 def main() -> None:
     """จุดเริ่มต้นของโปรแกรม"""
+    # บังคับใช้เลขอารบิกทั่วทั้งระบบ ป้องกัน Windows ภาษาไทยแสดงเลขไทย
+    QLocale.setDefault(QLocale(QLocale.Language.English, QLocale.Country.UnitedStates))
+
     # สร้างโฟลเดอร์แบบ dynamic (เมื่อเป็น .exe จะสร้างโฟลเดอร์ข้างๆ .exe)
     os.makedirs(get_dynamic_path("logs"), exist_ok=True)
     os.makedirs(get_dynamic_path("saveSetting"), exist_ok=True)
@@ -36,6 +40,9 @@ def main() -> None:
     os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] = "1"
     app = QApplication(sys.argv)
     
+    # ตั้งค่า Font (Google Sans) และยืนยันเลขอารบิก
+    init_app_font_and_locale(app)
+
     # ตั้งค่า Icon ของโปรแกรม
     icon_path = get_resource_path("icon.ico")
     app.setWindowIcon(QIcon(icon_path))

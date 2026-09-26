@@ -359,10 +359,11 @@ def merge_photobooth(
     canvas = Image.alpha_composite(canvas, template)
     template.close()
     
-    # บังคับปรับขนาดไฟล์สุดท้ายให้เป็น 1200x1800 เพื่อความคมชัดสูงสุดในการพิมพ์
-    if canvas.size != (1200, 1800):
-        logger.info("ปรับขนาดรูปผลลัพธ์เป็น 1200x1800 พิกเซล")
-        canvas = canvas.resize((1200, 1800), Image.Resampling.LANCZOS)
+    # ปรับขนาดไฟล์สุดท้ายให้ได้มาตรฐานความละเอียด 300 DPI (4x6 นิ้ว) ตามทิศทางของภาพ (Portrait 1200x1800 หรือ Landscape 1800x1200)
+    target_size = (1800, 1200) if canvas.width > canvas.height else (1200, 1800)
+    if canvas.size != target_size:
+        logger.info("ปรับขนาดรูปผลลัพธ์เป็น %dx%d พิกเซล", target_size[0], target_size[1])
+        canvas = canvas.resize(target_size, Image.Resampling.LANCZOS)
         
     logger.info("Overlay template frame เรียบร้อย")
 
